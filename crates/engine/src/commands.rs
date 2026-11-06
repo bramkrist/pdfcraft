@@ -159,6 +159,7 @@ const FILE: Option<&str> = Some("File");
 const EDIT: Option<&str> = Some("Edit");
 const VIEW: Option<&str> = Some("View");
 const PAGES: Option<&str> = Some("Pages");
+const IMPOSING: Option<&str> = Some("Imposing");
 const HELP: Option<&str> = Some("Help");
 
 /// Every command, in menu order.
@@ -398,6 +399,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.reverse", "Reverse pages", PAGES, None, Assembly, "arrow-up-down"),
     c("page.crop", "Crop pages", PAGES, None, Assembly, "crop"),
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
+    // Imposing (press-sheet layouts): each makes a new document; the open one is not changed.
+    c("impose.step_repeat", "Step and repeat…", IMPOSING, None, Printing, "grid-3x3"),
+    c("impose.n_up", "n-up pages…", IMPOSING, None, Printing, "layout-grid"),
+    c("impose.booklet", "Create booklet…", IMPOSING, None, Printing, "book-open"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
     c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),

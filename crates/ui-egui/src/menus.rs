@@ -87,6 +87,7 @@ const TITLES: &[&str] = &[
     "View",
     "Pages",
     "Sign",
+    "Imposing",
     "Window",
     "Help",
     "Open Recent",
@@ -225,6 +226,8 @@ const SIGN: &[&str] = &[
     "sign.validate",
     "sign.panel",
 ];
+/// Imposing: the press-sheet layouts, as an imposition plug-in's Easy imposition menu has them.
+const IMPOSING: &[&str] = &["impose.step_repeat", "impose.n_up", SEP, "impose.booklet"];
 const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab"];
 const HELP: &[&str] =
     &["help.shortcuts", SEP, "help.app_page", "help.github", "help.website", "help.discord", SEP, "help.check_updates", SEP, "help.about"];
@@ -338,6 +341,7 @@ impl PdfCraftApp {
                 .collect(),
         )];
         sign.extend(list(SIGN, &mut used));
+        let imposing = list(IMPOSING, &mut used);
         let window = list(WINDOW, &mut used);
         let help = list(HELP, &mut used);
         let mut view = vec![
@@ -370,6 +374,7 @@ impl PdfCraftApp {
                 Menu::new(tl!("Edit"), craft_menu::tidy(edit)).role(MenuRole::Edit),
                 Menu::new(tl!("View"), craft_menu::tidy(view)).role(MenuRole::View),
                 Menu::new(tl!("Sign"), craft_menu::tidy(sign)),
+                Menu::new(tl!("Imposing"), craft_menu::tidy(imposing)),
                 Menu::new(tl!("Window"), window).role(MenuRole::Window),
                 Menu::new(tl!("Help"), craft_menu::tidy(help)).role(MenuRole::Help),
             ],

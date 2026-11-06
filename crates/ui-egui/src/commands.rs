@@ -428,6 +428,15 @@ impl PdfCraftApp {
                 }
                 self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
             }
+            "impose.step_repeat" | "impose.n_up" | "impose.booklet" => {
+                let kind = match id {
+                    "impose.n_up" => crate::impose_ui::ImposeKind::NUp,
+                    "impose.booklet" => crate::impose_ui::ImposeKind::Booklet,
+                    _ => crate::impose_ui::ImposeKind::StepRepeat,
+                };
+                self.impose_draft.screen = 0;
+                self.dialog = Some(Dialog::Impose(kind));
+            }
             "page.boxes" => {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
