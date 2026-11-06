@@ -12,10 +12,16 @@
 //!   front, so a front cell and its back cell sit exactly behind each other once the sheet is
 //!   turned over the long or the short edge.
 //! - **Trim marks**: corner marks around every trimmed page, placed outside the bleed.
+//! - **Booklets** ([`booklet()`]): saddle-stitched, perfect-bound (signatures) and continuous page
+//!   order, two pages to a sheet side.
 //!
 //! All lengths are PDF points (1/72 inch). Sheet space has its origin at the lower left, y up.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod booklet;
+
+pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::Document;
@@ -397,5 +403,14 @@ pub fn impose_document(src: &Document, spec: &StepRepeat, content: Content) -> R
     Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
 }
 
+/// Lay out every page of `src` as a booklet by `spec` and write the sheet sides as a print-ready
+/// PDF (see [`impose_document`] for annotations and encryption).
+pub fn booklet_document(src: &Document, spec: &Booklet, content: Content) -> Result<Vec<u8>, DocumentError> {
+    let sheets = booklet(&pdfcraft_print::page_sizes(src), spec)?;
+    Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
+}
+
+#[cfg(test)]
+mod booklet_tests;
 #[cfg(test)]
 mod tests;

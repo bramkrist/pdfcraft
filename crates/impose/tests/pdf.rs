@@ -123,3 +123,22 @@ fn the_output_intent_of_the_source_survives_imposition() {
     let out = impose_document(&plain, &StepRepeat::new((300.0, 200.0)), Content::Document).expect("impose");
     assert!(catalog_entry(&out, b"OutputIntents").is_none());
 }
+
+#[test]
+fn a_saddle_stitched_booklet_puts_each_page_where_the_fold_needs_it() {
+    const GREEN: [u8; 3] = [0, 255, 0];
+    // Four pages, one colour each: red, green, blue, black.
+    let src = pdf(&[
+        (100, 60, "1 0 0 rg 0 0 100 60 re f"),
+        (100, 60, "0 1 0 rg 0 0 100 60 re f"),
+        (100, 60, "0 0 1 rg 0 0 100 60 re f"),
+        (100, 60, "0 0 0 rg 0 0 100 60 re f"),
+    ]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let out = pdfcraft_impose::booklet_document(&doc, &pdfcraft_impose::Booklet::new(), Content::Document).expect("booklet");
+    let (front, back) = (render(&out, 0), render(&out, 1));
+    assert_eq!((front.width, front.height), (200, 60));
+    // Outside of the sheet: page 4 | page 1. Inside: page 2 | page 3.
+    assert_eq!((rgb(&front, 50, 30), rgb(&front, 150, 30)), ([0, 0, 0], RED));
+    assert_eq!((rgb(&back, 50, 30), rgb(&back, 150, 30)), (GREEN, BLUE));
+}

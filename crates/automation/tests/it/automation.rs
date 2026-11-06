@@ -5210,6 +5210,37 @@ fn imposing_on_press_sheets_through_tools() {
 }
 
 #[test]
+fn making_a_booklet_through_tools() {
+    let dir = workdir("booklet");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["pages"].as_u64().unwrap();
+    // Saddle: n pages are padded to a multiple of 4 and take two sheet sides per 4 pages.
+    let r = ok(&mut a, "doc_booklet", json!({ "doc": doc, "path": "saddle.pdf" }));
+    assert_eq!((r["pages"].as_u64(), r["sides"].as_u64()), (Some(n), Some(n.div_ceil(4) * 2)));
+    let out = ok(&mut a, "doc_open", json!({ "path": "saddle.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": out }))["document"]["pages"].as_u64(), Some(n.div_ceil(4) * 2));
+    // Perfect bound in signatures of 4 and continuous binding on a named, wide sheet.
+    let r = ok(&mut a, "doc_booklet", json!({ "doc": doc, "binding": "perfect", "signature": 4, "sheet": "A3", "path": "perfect.pdf" }));
+    assert_eq!(r["sides"].as_u64(), Some(n.div_ceil(4) * 2));
+    let r = ok(&mut a, "doc_booklet", json!({ "doc": doc, "binding": "continuous", "scale": false, "sheet": "A3", "path": "cont.pdf" }));
+    assert_eq!(r["sides"].as_u64(), Some(n.div_ceil(2)));
+    for bad in [
+        json!({ "doc": doc }),
+        json!({ "doc": doc, "binding": "perfect", "path": "x.pdf" }),
+        json!({ "doc": doc, "binding": "perfect", "signature": 6, "path": "x.pdf" }),
+        json!({ "doc": doc, "binding": "stapled", "path": "x.pdf" }),
+        json!({ "doc": doc, "align": "left", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "scale": false, "sheet_width_mm": 50, "sheet_height_mm": 50, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet_width_mm": 10, "sheet_height_mm": 10, "scale": false, "path": "x.pdf" }),
+        json!({ "doc": doc, "edge_mm": -1, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_booklet", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();

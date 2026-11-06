@@ -8203,6 +8203,18 @@ evidence = ["crates/impose/src/tests.rs::repeat_fits_as_many_copies_as_the_sheet
 notes = "Layout geometry in crates/impose (points; no PDF objects), written through pdfcraft-print's sheet writer so vector pages are never rasterised. Step & repeat (one page across a grid per sheet), gang n-up (consecutive pages in reading order), gutters, centred grid, fixed cell with centring and clipping, duplex backs mirrored over the long or short edge so each back cell lies behind its front cell, corner trim marks outside the bleed, named press sheets (A5-A3, A3+, SRA4, SRA3, 12x18, 13x19). Checked by rendering the imposed PDF; not yet compared with a physical press proof or another imposition tool. Not yet: a dialog and command (headless tool only), creep, work-and-turn/tumble, perfect-bound and saddle signatures with marks, automatic cell rotation, colour bars, registration marks, page-box (TrimBox) driven cells, and printing under a high-quality-print restriction (refused rather than rasterised)."
 
 [[feature]]
+id = "print.booklet-impose"
+title = "Booklet imposition (saddle-stitched, perfect-bound, continuous)"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = ["doc_booklet"]
+evidence = ["crates/impose/src/booklet_tests.rs::saddle_stitch_of_eight_pages_pairs_first_with_last", "crates/impose/src/booklet_tests.rs::every_page_lands_once_and_every_sheet_side_adds_up_for_any_saddle_size", "crates/impose/src/booklet_tests.rs::perfect_binding_makes_saddle_signatures_read_one_after_another", "crates/impose/tests/pdf.rs::a_saddle_stitched_booklet_puts_each_page_where_the_fold_needs_it", "crates/automation/tests/it/automation.rs::making_a_booklet_through_tools"]
+notes = "Two pages per sheet side in fold order, written through pdfcraft-print's sheet writer so vector pages are never rasterised. Saddle (padded to a multiple of 4 with blanks at the end), perfect-bound signatures (last signature padded to full or to a multiple of 4), continuous; automatic or chosen sheet, one uniform scale from the largest page (or 100 % with a refusal when it does not fit), centre or spine alignment, edge space, right-to-left binding. Output is front/back sheet sides in order for duplex printing; checked by arithmetic properties over 4..64 pages and by rendering a four-page saddle booklet. Not yet: creep, cut stacks, separate front and back files / flipped backs, crop marks, bleed generation, a dialog and command (headless tool only), page numbers and covers."
+
+[[feature]]
 id = "print.page-range"
 title = "Print all, current page or a range (labels allowed)"
 area = "L"

@@ -7,6 +7,20 @@ impl Session {
     /// gang n-up, duplex backs, trim marks; see `pdfcraft-impose`). Printing must be permitted;
     /// layers print as they are shown, as in [`Session::print_pdf`].
     pub fn impose_pdf(&self, id: DocId, spec: &crate::impose::StepRepeat, content: print::Content) -> Result<Vec<u8>, EditError> {
+        let cos = self.imposition_source(id)?;
+        crate::impose::impose_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
+    }
+
+    /// The print-ready PDF of document `id` made into a booklet by `spec` (saddle-stitched,
+    /// perfect-bound or continuous; see `pdfcraft-impose`). The same permissions and layer rules
+    /// apply as for [`Session::impose_pdf`].
+    pub fn booklet_pdf(&self, id: DocId, spec: &crate::impose::Booklet, content: print::Content) -> Result<Vec<u8>, EditError> {
+        let cos = self.imposition_source(id)?;
+        crate::impose::booklet_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
+    }
+
+    /// The document as imposition reads it: printing permitted, layers as shown.
+    fn imposition_source(&self, id: DocId) -> Result<pdfcraft_cos::Document, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
             return Err(EditError::NotPermitted("printing"));
@@ -24,6 +38,6 @@ impl Session {
         if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
         }
-        crate::impose::impose_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
+        Ok(cos)
     }
 }

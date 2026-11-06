@@ -721,7 +721,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_impose",
             "Impose on press sheets",
-            "Lay the document's pages out on press sheets and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). fill repeat (default): every page is repeated across a grid on its own sheet (step & repeat: business cards, labels); sequential: consecutive pages fill the grid in reading order (n-up, ganging). Sheet: sheet by name (A5, A4, A3, A3+, SRA4, SRA3, 12x18, 13x19) or sheet_width_mm and sheet_height_mm; landscape turns it sideways. cols and rows default to as many as fit; the grid is centred inside margin_mm (default 10), with gutter_mm between cells (or gutter_x_mm and gutter_y_mm). cell_width_mm and cell_height_mm fix the cell (default: the page size; the largest page for sequential); a smaller page is centred in its cell and a larger one is clipped to it. bleed_mm is the bleed already inside each page: trim marks sit outside it. marks draws corner trim marks around every page (mark_length_mm, mark_offset_mm, default 3 mm each); a mark that would run over a page or off the sheet is left out, so leave a gutter wider than twice the bleed plus the mark offset to get marks between cells. duplex long-edge or short-edge: pages come in front/back pairs (repeat) or front/back chunks (sequential) and each back sheet mirrors its front, so every back cell lies exactly behind its front cell when the sheet is turned over that edge. Refuses a layout that does not fit instead of shrinking it. Not yet: creep, work-and-turn/tumble and perfect-bound signatures, automatic cell rotation, colour bars and registration marks.",
+            "Lay the document's pages out on press sheets and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). fill repeat (default): every page is repeated across a grid on its own sheet (step & repeat: business cards, labels); sequential: consecutive pages fill the grid in reading order (n-up, ganging). Sheet: sheet by name (A5, A4, A3, A3+, SRA4, SRA3, 12x18, 13x19) or sheet_width_mm and sheet_height_mm; landscape turns it sideways. cols and rows default to as many as fit; the grid is centred inside margin_mm (default 10), with gutter_mm between cells (or gutter_x_mm and gutter_y_mm). cell_width_mm and cell_height_mm fix the cell (default: the page size; the largest page for sequential); a smaller page is centred in its cell and a larger one is clipped to it. bleed_mm is the bleed already inside each page: trim marks sit outside it. marks draws corner trim marks around every page (mark_length_mm, mark_offset_mm, default 3 mm each); a mark that would run over a page or off the sheet is left out, so leave a gutter wider than twice the bleed plus the mark offset to get marks between cells. duplex long-edge or short-edge: pages come in front/back pairs (repeat) or front/back chunks (sequential) and each back sheet mirrors its front, so every back cell lies exactly behind its front cell when the sheet is turned over that edge. Refuses a layout that does not fit instead of shrinking it. Not yet: creep, work-and-turn/tumble, automatic cell rotation, colour bars and registration marks. For booklets use doc_booklet.",
         )
         .with(schema(
             json!({
@@ -745,6 +745,30 @@ pub fn tools() -> Vec<ToolDef> {
                 "marks": { "type": "boolean" },
                 "mark_length_mm": { "type": "number", "exclusiveMinimum": 0 },
                 "mark_offset_mm": { "type": "number", "minimum": 0 },
+                "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
+            }),
+            &["doc", "path"],
+        )),
+        t(
+            "doc_booklet",
+            "Make a booklet",
+            "Make the document into a booklet and save the print-ready PDF to path: two pages side by side on every sheet side, in the order that reads 1, 2, 3 ... once the printed sheets are folded and stitched (vector pages, not rasterised; encryption is not carried over). binding saddle (default): one signature folded in half, the first sheet carries the first and last pages, and a page count that is not a multiple of 4 is padded with blanks at the end; perfect: saddle signatures of `signature` pages (a multiple of 4) read one after another, the last one padded to a full signature (last_signature full) or to a multiple of 4 (multiple-of-four, default); continuous: pages run 1, 2, 3, 4 ... two to a side. Sheets come out as alternating fronts and backs, ready for double-sided printing. Sheet: by name or sheet_width_mm and sheet_height_mm (turned to landscape unless landscape is false), or omitted for the smallest sheet that holds two of the largest page at 100 %. scale (default true) scales every page by one factor to fill its half of the sheet; false keeps 100 % and refuses a sheet that is too small. align centre (default) or spine; edge_mm leaves an empty border; right_to_left binds on the right. Pages of different sizes are scaled by the factor of the largest and centred. Not yet: creep, cut stacks, separate front and back files, crop marks and bleed generation.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "binding": { "type": "string", "enum": ["saddle", "perfect", "continuous"] },
+                "signature": { "type": "integer", "minimum": 4, "description": "Pages per signature for perfect binding: a multiple of 4." },
+                "last_signature": { "type": "string", "enum": ["full", "multiple-of-four"] },
+                "sheet": { "type": "string" },
+                "sheet_width_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "sheet_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "landscape": { "type": "boolean" },
+                "scale": { "type": "boolean" },
+                "align": { "type": "string", "enum": ["centre", "spine"] },
+                "edge_mm": { "type": "number", "minimum": 0 },
+                "right_to_left": { "type": "boolean" },
                 "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
             }),
             &["doc", "path"],
