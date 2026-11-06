@@ -132,5 +132,9 @@ summary { cursor: pointer; font-weight: 600; }
 .bad { color: var(--danger); } .meh { color: #9A6B00; }
 .ack { font-size: 14px; max-width: 360px; }
 
+.inkman { border: 1px solid var(--line-strong); border-radius: 8px; padding: var(--sp-2) var(--sp-3); margin: var(--sp-3) 0; }
+.spotrow { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-1) var(--sp-2); align-items: center; padding: var(--sp-1) 0; }
+.spotrow .ink.spot { margin: 0; }
+.spotrow .inkact { grid-column: 2; max-width: 100%; }
 .fix { display: grid; gap: var(--sp-1); margin: var(--sp-3) 0; }
 .btn.small { padding: 8px 12px; font-size: 14px; }

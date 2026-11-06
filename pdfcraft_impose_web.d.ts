@@ -2,9 +2,9 @@
 /* eslint-disable */
 
 /**
- * The result of [`outline_text`]: the new file and the report as JSON.
+ * A changed file and the report of what changed, as JSON.
  */
-export class Outlined {
+export class Converted {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
@@ -28,9 +28,14 @@ export function layout(pages_json: string, job_json: string): string;
 export function layoutPdf(pdf: Uint8Array, job_json: string): string;
 
 /**
+ * `manageInks(pdfBytes, actionsJson)`: `{ bytes, report }` with spots merged or made process.
+ */
+export function manageInks(pdf: Uint8Array, actions_json: string): Converted;
+
+/**
  * `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
  */
-export function outlineText(pdf: Uint8Array): Outlined;
+export function outlineText(pdf: Uint8Array): Converted;
 
 /**
  * `pageSizes(pdfBytes)`: `[[w, h], ...]` in mm, as JSON.
@@ -51,23 +56,24 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_outlined_free: (a: number, b: number) => void;
+    readonly __wbg_converted_free: (a: number, b: number) => void;
+    readonly converted_bytes: (a: number) => [number, number];
+    readonly converted_report: (a: number) => [number, number];
     readonly impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly manageInks: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly outlineText: (a: number, b: number) => [number, number, number];
-    readonly outlined_bytes: (a: number) => [number, number];
-    readonly outlined_report: (a: number) => [number, number];
     readonly pageSizes: (a: number, b: number) => [number, number, number, number];
     readonly preflight: (a: number, b: number) => [number, number, number, number];
     readonly version: () => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

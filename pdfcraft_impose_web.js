@@ -1,30 +1,30 @@
 /* @ts-self-types="./pdfcraft_impose_web.d.ts" */
 
 /**
- * The result of [`outline_text`]: the new file and the report as JSON.
+ * A changed file and the report of what changed, as JSON.
  */
-export class Outlined {
+export class Converted {
     static __wrap(ptr) {
-        const obj = Object.create(Outlined.prototype);
+        const obj = Object.create(Converted.prototype);
         obj.__wbg_ptr = ptr;
-        OutlinedFinalization.register(obj, obj.__wbg_ptr, obj);
+        ConvertedFinalization.register(obj, obj.__wbg_ptr, obj);
         return obj;
     }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        OutlinedFinalization.unregister(this);
+        ConvertedFinalization.unregister(this);
         return ptr;
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_outlined_free(ptr, 0);
+        wasm.__wbg_converted_free(ptr, 0);
     }
     /**
      * @returns {Uint8Array}
      */
     get bytes() {
-        const ret = wasm.outlined_bytes(this.__wbg_ptr);
+        const ret = wasm.converted_bytes(this.__wbg_ptr);
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
@@ -36,7 +36,7 @@ export class Outlined {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.outlined_report(this.__wbg_ptr);
+            const ret = wasm.converted_report(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -45,7 +45,7 @@ export class Outlined {
         }
     }
 }
-if (Symbol.dispose) Outlined.prototype[Symbol.dispose] = Outlined.prototype.free;
+if (Symbol.dispose) Converted.prototype[Symbol.dispose] = Converted.prototype.free;
 
 /**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
@@ -126,9 +126,27 @@ export function layoutPdf(pdf, job_json) {
 }
 
 /**
+ * `manageInks(pdfBytes, actionsJson)`: `{ bytes, report }` with spots merged or made process.
+ * @param {Uint8Array} pdf
+ * @param {string} actions_json
+ * @returns {Converted}
+ */
+export function manageInks(pdf, actions_json) {
+    const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(actions_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.manageInks(ptr0, len0, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return Converted.__wrap(ret[0]);
+}
+
+/**
  * `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
  * @param {Uint8Array} pdf
- * @returns {Outlined}
+ * @returns {Converted}
  */
 export function outlineText(pdf) {
     const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
@@ -137,7 +155,7 @@ export function outlineText(pdf) {
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
-    return Outlined.__wrap(ret[0]);
+    return Converted.__wrap(ret[0]);
 }
 
 /**
@@ -290,9 +308,9 @@ function __wbg_get_imports() {
     };
 }
 
-const OutlinedFinalization = (typeof FinalizationRegistry === 'undefined')
+const ConvertedFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_outlined_free(ptr, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_converted_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();
