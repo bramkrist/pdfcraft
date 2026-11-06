@@ -153,3 +153,68 @@ fn manual_mistakes_are_errors() {
     assert!(parse_job(r#"{"mode":"manual","sheet_mm":[100,100],"manual":[[{"page":0,"x":0,"y_mm":0}]]}"#).is_err());
     assert!(layout(&[[50.0, 50.0]], &job(r#"{"mode":"manual","sheet_mm":[100,100]}"#)).is_err());
 }
+
+/// A PDF whose page `i` is `100 + 10 i` points wide (so pages can be told apart by size) and
+/// shows the text marker `PAGE<i>` in its content stream.
+fn marked_pdf(n: usize) -> Vec<u8> {
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" "))];
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} 200] /Contents {} 0 R >>", 100 + 10 * i, 4 + 2 * i));
+        let s = format!("% PAGE{i}\n0 0 1 rg 0 0 10 10 re f");
+        objs.push(format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len()));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+fn widths_pt(pdf: Vec<u8>) -> Vec<(i64, i64)> {
+    page_sizes(pdf).expect("sizes").iter().map(|[w, h]| (pt(*w).round() as i64, pt(*h).round() as i64)).collect()
+}
+
+#[test]
+fn the_page_editor_reorders_turns_copies_inserts_and_deletes() {
+    let src = marked_pdf(4); // widths 100, 110, 120, 130
+    let other = marked_pdf(1); // width 100
+    let plan: Vec<PlanPage> = serde_json::from_str(
+        r#"[
+            {"src":0,"page":2,"rotate":90},
+            {"blank_mm":[100,50]},
+            {"src":0,"page":0},
+            {"src":0,"page":0,"rotate":-90},
+            {"src":1,"page":0},
+            {"src":0,"page":3}
+        ]"#,
+    )
+    .expect("plan");
+    let out = assemble(src, vec![other], &plan).expect("assemble");
+    let sizes = widths_pt(out.clone());
+    // Turned pages show their sides swapped; the blank is 100 x 50 mm.
+    assert_eq!(sizes, vec![(200, 120), (283, 142), (100, 200), (200, 100), (100, 200), (130, 200)]);
+    // Page 2 (index 1) was left out: deleted for good, not just unlinked.
+    let text = String::from_utf8_lossy(&out);
+    assert!(!text.contains("PAGE1"), "a deleted page's content must not stay in the file");
+    assert!(text.contains("PAGE2") && text.contains("PAGE3"));
+}
+
+#[test]
+fn page_editor_mistakes_are_errors() {
+    let plan = |j: &str| serde_json::from_str::<Vec<PlanPage>>(j).expect("plan");
+    assert!(assemble(marked_pdf(2), vec![], &plan("[]")).is_err());
+    assert!(assemble(marked_pdf(2), vec![], &plan(r#"[{"src":0,"page":5}]"#)).is_err_and(|e| e.contains("no page 6")));
+    assert!(assemble(marked_pdf(2), vec![], &plan(r#"[{"src":2,"page":0}]"#)).is_err_and(|e| e.contains("extra file")));
+    assert!(assemble(marked_pdf(2), vec![], &plan(r#"[{"src":0,"page":0,"rotate":45}]"#)).is_err());
+    assert!(assemble(marked_pdf(2), vec![], &plan(r#"[{"blank_mm":[0,10]}]"#)).is_err());
+    assert!(assemble(b"nope".to_vec(), vec![], &plan(r#"[{"src":0,"page":0}]"#)).is_err());
+}

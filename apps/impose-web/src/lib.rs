@@ -422,6 +422,109 @@ pub fn inks(pdf: Vec<u8>, actions_json: &str) -> Result<(Vec<u8>, pdfcraft_prepr
     pdfcraft_prepress::inks::manage_inks(pdf, &actions)
 }
 
+/// One page of the document the page editor makes.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, untagged)]
+pub enum PlanPage {
+    /// Page `page` (0-based) of source `src` (0 = the document itself, k = the k-th extra file),
+    /// turned `rotate` degrees clockwise on top of the rotation it has (a multiple of 90).
+    Page {
+        src: usize,
+        page: usize,
+        #[serde(default)]
+        rotate: i64,
+    },
+    /// A blank page of this size.
+    Blank { blank_mm: [f64; 2] },
+}
+
+/// Most pages a page-editor plan may make.
+const MAX_PLAN_PAGES: usize = 20_000;
+
+/// The page editor: a new document whose pages are `plan` in order. Pages are moved, copied
+/// and turned as page objects (their links, comments, form fields and bookmarks go with them);
+/// pages of the document left out are deleted for good, and the file is written in full so
+/// nothing of them stays behind. Pages from `extras` are imported with their fields renamed
+/// where names clash.
+pub fn assemble(pdf: Vec<u8>, extras: Vec<Vec<u8>>, plan: &[PlanPage]) -> Result<Vec<u8>, String> {
+    use pdfcraft_organize as org;
+    let err = |e: org::OrganizeError| e.to_string();
+    if plan.is_empty() {
+        return Err(bad("the new document needs at least one page"));
+    }
+    if plan.len() > MAX_PLAN_PAGES {
+        return Err(bad(format!("at most {MAX_PLAN_PAGES} pages")));
+    }
+    let mut doc = open(pdf)?;
+    let extras: Vec<Document> = extras.into_iter().map(open).collect::<Result<_, _>>()?;
+    let original: Vec<pdfcraft_cos::ObjRef> = org::pages(&doc).map_err(err)?.into_iter().map(|p| p.obj).collect();
+    let extra_counts: Vec<usize> = extras.iter().map(|d| org::page_count(d).map_err(err)).collect::<Result<_, _>>()?;
+    // 1. Make every page the plan needs, in plan order, and remember which object it is.
+    let mut used = vec![false; original.len()];
+    let mut target = Vec::with_capacity(plan.len());
+    let mut turns = Vec::with_capacity(plan.len());
+    for (i, entry) in plan.iter().enumerate() {
+        let end = org::page_count(&doc).map_err(err)?;
+        match *entry {
+            PlanPage::Page { src, page, rotate } => {
+                if rotate % 90 != 0 {
+                    return Err(bad(format!("page {}: rotation must be a multiple of 90", i + 1)));
+                }
+                let obj = if src == 0 {
+                    let &obj = original.get(page).ok_or_else(|| bad(format!("page {}: the document has no page {}", i + 1, page + 1)))?;
+                    match used.get_mut(page) {
+                        Some(u) if !*u => {
+                            *u = true;
+                            obj
+                        }
+                        _ => {
+                            // A second use: a copy of the page, sharing its fonts and images.
+                            let now = org::pages(&doc).map_err(err)?.iter().position(|p| p.obj == obj).ok_or_else(|| bad("page lost"))?;
+                            let snapshot = doc.clone();
+                            *org::import_pages(&mut doc, &snapshot, &[now], end).map_err(err)?.first().ok_or_else(|| bad("copy failed"))?
+                        }
+                    }
+                } else {
+                    let ex = extras.get(src - 1).ok_or_else(|| bad(format!("page {}: there is no extra file {src}", i + 1)))?;
+                    if page >= extra_counts.get(src - 1).copied().unwrap_or(0) {
+                        return Err(bad(format!("page {}: extra file {src} has no page {}", i + 1, page + 1)));
+                    }
+                    let out = org::import_pages_with(&mut doc, ex, &[page], end, org::FieldConflicts::Rename).map_err(err)?;
+                    *out.pages.first().ok_or_else(|| bad("import failed"))?
+                };
+                target.push(obj);
+                turns.push(rotate);
+            }
+            PlanPage::Blank { blank_mm: [w, h] } => {
+                if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && w <= 5080.0 && h <= 5080.0) {
+                    return Err(bad(format!("page {}: a blank page needs a size between 0 and 5080 mm", i + 1)));
+                }
+                target.push(org::insert_blank_page(&mut doc, end, pt(w), pt(h)).map_err(err)?);
+                turns.push(0);
+            }
+        }
+    }
+    // 2. Delete the document's pages the plan leaves out.
+    let unused: Vec<usize> = used.iter().enumerate().filter(|(_, u)| !**u).map(|(i, _)| i).collect();
+    if !unused.is_empty() {
+        org::delete_pages(&mut doc, &unused).map_err(err)?;
+    }
+    // 3. Put the pages in plan order.
+    for (i, obj) in target.iter().enumerate() {
+        let now = org::pages(&doc).map_err(err)?.iter().position(|p| p.obj == *obj).ok_or_else(|| bad("page lost while ordering"))?;
+        if now != i {
+            org::move_pages(&mut doc, &[now], i).map_err(err)?;
+        }
+    }
+    // 4. Turn them.
+    for (i, t) in turns.iter().enumerate() {
+        if t.rem_euclid(360) != 0 {
+            org::rotate_pages(&mut doc, &[i], *t).map_err(err)?;
+        }
+    }
+    pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())
+}
+
 fn parse_job(json: &str) -> Result<Job, String> {
     serde_json::from_str(json).map_err(|e| format!("job: {e}"))
 }
@@ -500,6 +603,21 @@ mod wasm {
     pub fn manage_inks(pdf: Vec<u8>, actions_json: &str) -> Result<Converted, JsError> {
         let (bytes, report) = super::inks(pdf, actions_json).map_err(js)?;
         Ok(Converted { bytes, report: to_json(&report)? })
+    }
+
+    /// `assemblePages(pdfBytes, extrasBytes, extraLengths, planJson)`: the page editor's new
+    /// document. `extrasBytes` holds the other files one after another, `extraLengths` their sizes.
+    #[wasm_bindgen(js_name = assemblePages)]
+    pub fn assemble_pages(pdf: Vec<u8>, extras: Vec<u8>, extra_lengths: Vec<u32>, plan_json: &str) -> Result<Vec<u8>, JsError> {
+        let plan: Vec<super::PlanPage> = serde_json::from_str(plan_json).map_err(|e| JsError::new(&format!("plan: {e}")))?;
+        let mut files = Vec::with_capacity(extra_lengths.len());
+        let mut at = 0usize;
+        for n in extra_lengths {
+            let end = at.checked_add(n as usize).ok_or_else(|| JsError::new("extra files: bad lengths"))?;
+            files.push(extras.get(at..end).ok_or_else(|| JsError::new("extra files: bad lengths"))?.to_vec());
+            at = end;
+        }
+        super::assemble(pdf, files, &plan).map_err(js)
     }
 
     /// The engine version, to show in the UI and record with a job.

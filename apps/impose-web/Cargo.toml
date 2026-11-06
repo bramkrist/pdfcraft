@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pdfcraft-cos = { workspace = true }
 pdfcraft-impose = { workspace = true }
+pdfcraft-organize = { workspace = true }
 pdfcraft-prepress = { workspace = true }
 pdfcraft-print = { workspace = true }
 serde = { workspace = true }

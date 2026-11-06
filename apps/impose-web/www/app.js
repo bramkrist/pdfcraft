@@ -72,12 +72,35 @@ root.innerHTML = `
       <div class="summary" id="summary"></div>
       <div class="viewseg" id="views">
         <button type="button" data-view="doc">Isi tab</button>
+        <button type="button" data-view="pages">Edit halaman</button>
         <button type="button" data-view="layout">Layout garis</button>
         <button type="button" data-view="picture">Layout gambar</button>
       </div>
     </div>
-    <div class="canvaswrap"><canvas id="cv" width="900" height="600"></canvas></div>
-    <div class="nav"><button type="button" id="prev" aria-label="Sebelumnya">‹</button><span id="pos"></span><button type="button" id="next" aria-label="Berikutnya">›</button></div>
+    <div class="canvaswrap" id="cvwrap"><canvas id="cv" width="900" height="600"></canvas></div>
+    <div class="org" id="org" hidden>
+      <div class="orgbar">
+        <button type="button" class="btn ghost small" data-o="rotl" title="Putar kiri (Shift+R)">⟲</button>
+        <button type="button" class="btn ghost small" data-o="rotr" title="Putar kanan (R)">⟳</button>
+        <button type="button" class="btn ghost small" data-o="dup" title="Duplikat (Ctrl+D)">Duplikat</button>
+        <button type="button" class="btn ghost small" data-o="del" title="Hapus (Del)">Hapus</button>
+        <button type="button" class="btn ghost small" data-o="left" title="Geser ke kiri">◀</button>
+        <button type="button" class="btn ghost small" data-o="right" title="Geser ke kanan">▶</button>
+        <button type="button" class="btn ghost small" data-o="blank" title="Sisipkan halaman kosong sesudah pilihan">+ Kosong</button>
+        <button type="button" class="btn ghost small" data-o="undo" title="Batalkan (Ctrl+Z)">↶ Batal</button>
+        <button type="button" class="btn ghost small" data-o="reset">Ulang</button>
+      </div>
+      <div class="orgbar">
+        <label class="l" for="o-from" style="margin:0">Sisipkan dari tab</label>
+        <select id="o-from"></select>
+        <input type="text" id="o-range" placeholder="semua / 1-3,5" style="width:140px">
+        <button type="button" class="btn ghost small" data-o="insert">Sisipkan</button>
+        <span class="hint" id="orginfo"></span>
+      </div>
+      <div class="orggrid" id="orggrid" tabindex="0" aria-label="Halaman"></div>
+      <p class="hint">Klik pilih · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+klik pilih banyak · tarik untuk pindah · <kbd>R</kbd> putar · <kbd>Del</kbd> hapus · <kbd>Ctrl+C</kbd>/<kbd>Ctrl+V</kbd> salin · <kbd>Ctrl+Z</kbd> batal. Hasil jadi tab baru; link, komentar & bookmark ikut halamannya.</p>
+    </div>
+    <div class="nav" id="navbar"><button type="button" id="prev" aria-label="Sebelumnya">‹</button><span id="pos"></span><button type="button" id="next" aria-label="Berikutnya">›</button></div>
     <div class="actions">
       <label class="check ack" id="ackwrap" hidden><input type="checkbox" id="ack"> File ada masalah merah. Saya sudah cek dan tetap lanjut.</label>
       <button type="button" class="btn" id="apply" disabled>Terapkan ke tab baru</button>
@@ -545,6 +568,16 @@ function draw() {
     $('summary').innerHTML = '<span class="hint">Buka PDF untuk mulai.</span>';
     clearCanvas();
     navText();
+    return;
+  }
+  const pagesView = state.view === 'pages';
+  $('org').hidden = !pagesView;
+  $('cvwrap').hidden = pagesView;
+  $('navbar').hidden = pagesView;
+  if (pagesView) {
+    $('apply').disabled = state.busy || !orgOf(d).items.length;
+    $('summary').innerHTML = `<div class="big">${orgOf(d).items.length}<small>halaman setelah diedit</small></div><div class="hint">dari ${d.sizes.length} halaman di tab ini</div>`;
+    renderOrg();
     return;
   }
   if (state.view === 'doc') {
@@ -1102,6 +1135,313 @@ function manualSelInput(e) {
   manualChanged();
 }
 
+// ---- page editor --------------------------------------------------------------------------
+// Works on a list of what the new document will hold; thumbnails come from the source tabs and
+// nothing is processed until "Terapkan", when the engine moves, copies and turns the real page
+// objects (links, comments and bookmarks go with them) and writes the result as a new tab.
+
+let orgSeq = 0;
+const thumbs = new Map(); // `${docId}:${page}` -> data URL | Promise
+
+function orgOf(d) {
+  if (!d.org) orgReset(d);
+  return d.org;
+}
+
+function orgReset(d) {
+  d.org = { items: d.sizes.map((_, i) => ({ key: ++orgSeq, doc: d.id, page: i, rot: 0 })), sel: new Set(), anchor: null, undo: [], clip: [] };
+}
+
+function orgSnapshot(o) {
+  o.undo.push(o.items.map((x) => ({ ...x })));
+  if (o.undo.length > 50) o.undo.shift();
+}
+
+function orgSize(it) {
+  if (it.blank) return it.blank;
+  const src = state.docs.find((x) => x.id === it.doc);
+  return (src && src.sizes[it.page]) || [210, 297];
+}
+
+function thumb(docId, page) {
+  const key = `${docId}:${page}`;
+  if (thumbs.has(key)) return thumbs.get(key);
+  const src = state.docs.find((x) => x.id === docId);
+  if (!src) return null;
+  const p = (async () => {
+    const doc = await pdfDoc(src.bytes);
+    const pg = await doc.getPage(page + 1);
+    const vp1 = pg.getViewport({ scale: 1 });
+    const sc = 220 / Math.max(vp1.width, vp1.height);
+    const vp = pg.getViewport({ scale: sc });
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(vp.width);
+    c.height = Math.ceil(vp.height);
+    await pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    const url = c.toDataURL('image/jpeg', 0.8);
+    thumbs.set(key, url);
+    return url;
+  })();
+  thumbs.set(key, p);
+  p.catch(() => thumbs.delete(key));
+  return p;
+}
+
+function renderOrg() {
+  const d = activeDoc();
+  if (!d) return;
+  const o = orgOf(d);
+  const from = $('o-from');
+  const opts = state.docs.map((x) => `<option value="${x.id}" ${x.id === Number(from.value) ? 'selected' : ''}>${esc(x.name)} (${x.sizes.length} hal.)</option>`).join('');
+  if (from.innerHTML !== opts) from.innerHTML = opts;
+  const grid = $('orggrid');
+  grid.innerHTML = o.items.map((it, i) => {
+    const [w, h] = orgSize(it);
+    const turned = it.rot % 180 !== 0;
+    const label = it.blank ? 'kosong' : it.doc === d.id ? `hal. ${it.page + 1}` : `${esc((state.docs.find((x) => x.id === it.doc) || { name: '?' }).name)} · ${it.page + 1}`;
+    return `<figure class="pg ${o.sel.has(i) ? 'on' : ''}" draggable="true" data-i="${i}">
+      <div class="pgbox"><div class="pgimg ${it.blank ? 'blank' : ''}" style="${thumbStyle(w, h, turned)}transform:rotate(${it.rot}deg)" data-key="${it.blank ? '' : `${it.doc}:${it.page}`}"></div></div>
+      <figcaption><b>${i + 1}</b> <span>${label}${it.rot ? ` · ${it.rot > 0 ? '⟳' : '⟲'}${Math.abs(it.rot)}°` : ''}</span></figcaption>
+    </figure>`;
+  }).join('');
+  $('orginfo').textContent = o.sel.size ? `${o.sel.size} dipilih` : '';
+  // Fill thumbnails, cached per source page.
+  grid.querySelectorAll('.pgimg[data-key]').forEach((el) => {
+    const key = el.dataset.key;
+    if (!key) return;
+    const [docId, page] = key.split(':').map(Number);
+    const t = thumb(docId, page);
+    const set = (url) => { el.style.backgroundImage = `url(${url})`; };
+    if (typeof t === 'string') set(t);
+    else if (t) t.then(set).catch(() => {});
+  });
+}
+
+/** Size of a thumbnail so that, turned, it fits a 112 x 150 box. */
+function thumbStyle(w, h, turned) {
+  const [bw, bh] = turned ? [h, w] : [w, h];
+  const k = Math.min(112 / bw, 150 / bh);
+  return `width:${Math.round(w * k)}px;height:${Math.round(h * k)}px;`;
+}
+
+function orgSelected(o) {
+  return [...o.sel].sort((a, b) => a - b);
+}
+
+function orgAction(what) {
+  const d = activeDoc();
+  if (!d) return;
+  const o = orgOf(d);
+  const sel = orgSelected(o);
+  const after = sel.length ? sel[sel.length - 1] + 1 : o.items.length;
+  if (what === 'undo') {
+    if (o.undo.length) { o.items = o.undo.pop(); o.sel.clear(); }
+  } else if (what === 'reset') {
+    orgSnapshot(o);
+    const undo = o.undo;
+    orgReset(d);
+    d.org.undo = undo;
+  } else if (what === 'blank') {
+    orgSnapshot(o);
+    const ref = o.items[sel.length ? sel[sel.length - 1] : o.items.length - 1];
+    const [w, h] = ref ? orgSize(ref) : [210, 297];
+    const turned = ref && ref.rot % 180 !== 0;
+    o.items.splice(after, 0, { key: ++orgSeq, blank: turned ? [h, w] : [w, h], rot: 0 });
+    o.sel = new Set([after]);
+  } else if (what === 'insert') {
+    const src = state.docs.find((x) => x.id === Number($('o-from').value));
+    if (!src) return;
+    const pages = parseRange($('o-range').value, src.sizes.length);
+    if (!pages) return say('Halaman tidak valid. Contoh: 1-3,5', true);
+    orgSnapshot(o);
+    o.items.splice(after, 0, ...pages.map((p) => ({ key: ++orgSeq, doc: src.id, page: p, rot: 0 })));
+    o.sel = new Set(pages.map((_, k) => after + k));
+  } else if (what === 'paste') {
+    if (!o.clip.length) return;
+    orgSnapshot(o);
+    o.items.splice(after, 0, ...o.clip.map((x) => ({ ...x, key: ++orgSeq })));
+    o.sel = new Set(o.clip.map((_, k) => after + k));
+  } else {
+    if (!sel.length) return say('Pilih halaman dulu.', true);
+    if (what === 'copy') {
+      o.clip = sel.map((i) => ({ ...o.items[i] }));
+      return say(`${sel.length} halaman disalin. Ctrl+V untuk tempel sesudah pilihan.`, false, true);
+    }
+    orgSnapshot(o);
+    if (what === 'rotl' || what === 'rotr') {
+      for (const i of sel) o.items[i].rot = (((o.items[i].rot + (what === 'rotr' ? 90 : -90) + 180) % 360) + 360) % 360 - 180 || 0;
+    } else if (what === 'dup') {
+      const copies = sel.map((i) => ({ ...o.items[i], key: ++orgSeq }));
+      o.items.splice(after, 0, ...copies);
+      o.sel = new Set(copies.map((_, k) => after + k));
+    } else if (what === 'del') {
+      if (sel.length === o.items.length) { o.undo.pop(); return say('Minimal satu halaman harus tersisa.', true); }
+      o.items = o.items.filter((_, i) => !o.sel.has(i));
+      o.sel.clear();
+    } else if (what === 'left' || what === 'right') {
+      const to = what === 'left' ? Math.max(0, sel[0] - 1) : Math.min(o.items.length - sel.length, sel[0] + 1);
+      orgMove(o, sel, to);
+    }
+  }
+  draw();
+}
+
+/** Move the selected items (kept in order) so they start at `to` in the resulting list. */
+function orgMove(o, sel, to) {
+  const moving = sel.map((i) => o.items[i]);
+  const rest = o.items.filter((_, i) => !o.sel.has(i));
+  const at = Math.max(0, Math.min(to, rest.length));
+  rest.splice(at, 0, ...moving);
+  o.items = rest;
+  o.sel = new Set(moving.map((_, k) => at + k));
+}
+
+/** "1-3,5" -> [0, 1, 2, 4]; empty or "semua" -> every page; null when invalid. */
+function parseRange(t, n) {
+  t = String(t || '').trim().toLowerCase();
+  if (!t || t === 'semua' || t === 'all') return [...Array(n).keys()];
+  const out = [];
+  for (const part of t.split(',')) {
+    const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if (!m) return null;
+    const a = Number(m[1]), b = m[2] ? Number(m[2]) : a;
+    if (a < 1 || b > n || a > b) return null;
+    for (let p = a; p <= b; p++) out.push(p - 1);
+  }
+  return out.length ? out : null;
+}
+
+let orgDrag = null;
+function orgWire() {
+  const grid = $('orggrid');
+  grid.addEventListener('click', (e) => {
+    const f = e.target.closest('.pg');
+    const d = activeDoc();
+    if (!d) return;
+    const o = orgOf(d);
+    if (!f) { o.sel.clear(); return draw(); }
+    const i = Number(f.dataset.i);
+    if (e.shiftKey && o.anchor !== null) {
+      const [a, b] = [Math.min(o.anchor, i), Math.max(o.anchor, i)];
+      if (!(e.ctrlKey || e.metaKey)) o.sel.clear();
+      for (let k = a; k <= b; k++) o.sel.add(k);
+    } else if (e.ctrlKey || e.metaKey) {
+      if (o.sel.has(i)) o.sel.delete(i); else o.sel.add(i);
+      o.anchor = i;
+    } else {
+      o.sel = new Set([i]);
+      o.anchor = i;
+    }
+    grid.focus({ preventScroll: true });
+    draw();
+  });
+  grid.addEventListener('dragstart', (e) => {
+    const f = e.target.closest('.pg');
+    const d = activeDoc();
+    if (!f || !d) return;
+    const o = orgOf(d);
+    const i = Number(f.dataset.i);
+    if (!o.sel.has(i)) o.sel = new Set([i]);
+    orgDrag = true;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', 'pages');
+  });
+  grid.addEventListener('dragover', (e) => {
+    if (!orgDrag) return;
+    e.preventDefault();
+    const f = e.target.closest('.pg');
+    grid.querySelectorAll('.pg.dropL,.pg.dropR').forEach((x) => x.classList.remove('dropL', 'dropR'));
+    if (f) {
+      const r = f.getBoundingClientRect();
+      f.classList.add(e.clientX < r.left + r.width / 2 ? 'dropL' : 'dropR');
+    }
+  });
+  grid.addEventListener('drop', (e) => {
+    if (!orgDrag) return;
+    e.preventDefault();
+    orgDrag = null;
+    const d = activeDoc();
+    if (!d) return;
+    const o = orgOf(d);
+    const f = e.target.closest('.pg');
+    let slot = o.items.length;
+    if (f) {
+      const r = f.getBoundingClientRect();
+      slot = Number(f.dataset.i) + (e.clientX < r.left + r.width / 2 ? 0 : 1);
+    }
+    const sel = orgSelected(o);
+    // Position among the pages that stay: slots before it that are moving don't count.
+    const to = slot - sel.filter((i) => i < slot).length;
+    orgSnapshot(o);
+    orgMove(o, sel, to);
+    draw();
+  });
+  grid.addEventListener('dragend', () => {
+    orgDrag = null;
+    grid.querySelectorAll('.pg.dropL,.pg.dropR').forEach((x) => x.classList.remove('dropL', 'dropR'));
+  });
+  grid.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    const mod = e.ctrlKey || e.metaKey;
+    const d = activeDoc();
+    if (!d) return;
+    const map = { delete: 'del', backspace: 'del' };
+    if (mod && k === 'a') { e.preventDefault(); orgOf(d).sel = new Set(orgOf(d).items.map((_, i) => i)); return draw(); }
+    if (mod && k === 'z') { e.preventDefault(); return orgAction('undo'); }
+    if (mod && k === 'c') { e.preventDefault(); return orgAction('copy'); }
+    if (mod && k === 'v') { e.preventDefault(); return orgAction('paste'); }
+    if (mod && k === 'd') { e.preventDefault(); return orgAction('dup'); }
+    if (!mod && k === 'r') { e.preventDefault(); return orgAction(e.shiftKey ? 'rotl' : 'rotr'); }
+    if (map[k]) { e.preventDefault(); return orgAction(map[k]); }
+  });
+  $('org').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-o]');
+    if (b) orgAction(b.dataset.o);
+  });
+}
+
+async function applyPages() {
+  const d = activeDoc();
+  if (!d || !state.engine) return;
+  const o = orgOf(d);
+  const extras = [];
+  const plan = o.items.map((it) => {
+    if (it.blank) return { blank_mm: it.blank };
+    let src = 0;
+    if (it.doc !== d.id) {
+      let k = extras.findIndex((x) => x.id === it.doc);
+      if (k < 0) { const x = state.docs.find((z) => z.id === it.doc); if (!x) return null; extras.push(x); k = extras.length - 1; }
+      src = k + 1;
+    }
+    return { src, page: it.page, rotate: it.rot };
+  });
+  if (plan.some((p) => !p)) return say('Ada halaman dari tab yang sudah ditutup. Hapus dulu halaman itu.', true);
+  state.busy = true;
+  draw();
+  say('Menyusun halaman…');
+  await new Promise((r) => setTimeout(r, 20));
+  let note = null;
+  try {
+    const total = extras.reduce((n, x) => n + x.bytes.length, 0);
+    const buf = new Uint8Array(total);
+    let at = 0;
+    for (const x of extras) { buf.set(x.bytes, at); at += x.bytes.length; }
+    const out = state.engine.assemblePages(d.bytes.slice(), buf, new Uint32Array(extras.map((x) => x.bytes.length)), JSON.stringify(plan));
+    const nd = addDoc(`${d.name} › Edit halaman`, out, [...d.tags, 'EDIT']);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      note = [`Tab baru: ${plan.length} halaman. Halaman yang dihapus benar-benar hilang dari file.`, false, true];
+    }
+  } catch (e) {
+    note = ['Edit halaman gagal: ' + String(e.message || e), true];
+  } finally {
+    state.busy = false;
+    recompute();
+    if (note) say(...note);
+  }
+}
+
 // ---- actions ------------------------------------------------------------------------------
 async function apply() {
   const d = activeDoc();
@@ -1215,7 +1555,7 @@ $('tabs').addEventListener('click', (e) => {
 });
 $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.sheet - 1); draw(); });
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
-$('apply').addEventListener('click', apply);
+$('apply').addEventListener('click', () => (state.view === 'pages' ? applyPages() : apply()));
 $('ack').addEventListener('change', draw);
 $('pf').addEventListener('click', (e) => {
   if (e.target.closest('#do-outline')) outlineActive();
@@ -1239,5 +1579,6 @@ document.addEventListener('keydown', manualKey);
 $('download').addEventListener('click', () => save(false));
 $('saveas').addEventListener('click', () => save(true));
 
+orgWire();
 renderOptions();
 loadEngine().then(draw);
