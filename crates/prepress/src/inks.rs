@@ -369,12 +369,25 @@ pub fn manage_inks(pdf: Vec<u8>, actions: &BTreeMap<String, InkAction>) -> Resul
     let bytes = Arc::new(pdf);
     let mut doc = Document::open(bytes.clone()).map_err(|e| format!("cannot open the PDF: {e}"))?;
     let hpdf = Pdf::new_with_password(bytes.clone(), "").ok();
-    let targets: HashSet<String> = actions.iter().filter(|(_, a)| **a == InkAction::ToProcess).map(|(n, _)| n.clone()).collect();
-    let aliases: BTreeMap<Vec<u8>, Vec<u8>> = actions
+    // Follow alias chains (A → B → C) to where each spot ends up; a cycle leaves the spot alone.
+    let resolve = |name: &str| -> Option<InkAction> {
+        let mut at = name;
+        for _ in 0..=actions.len() {
+            match actions.get(at) {
+                Some(InkAction::Alias(to)) if to != at => at = to,
+                Some(InkAction::ToProcess) => return Some(InkAction::ToProcess),
+                _ => return (at != name).then(|| InkAction::Alias(at.to_string())),
+            }
+        }
+        None
+    };
+    let resolved: BTreeMap<&String, InkAction> = actions.keys().filter_map(|n| resolve(n).map(|a| (n, a))).collect();
+    let targets: HashSet<String> = resolved.iter().filter(|(_, a)| **a == InkAction::ToProcess).map(|(n, _)| (*n).clone()).collect();
+    let aliases: BTreeMap<Vec<u8>, Vec<u8>> = resolved
         .iter()
         .filter_map(|(n, a)| match a {
-            InkAction::Alias(to) if to != n => Some((n.as_bytes().to_vec(), to.as_bytes().to_vec())),
-            _ => None,
+            InkAction::Alias(to) => Some((n.as_bytes().to_vec(), to.as_bytes().to_vec())),
+            InkAction::ToProcess => None,
         })
         .collect();
     let mut report = InkReport::default();

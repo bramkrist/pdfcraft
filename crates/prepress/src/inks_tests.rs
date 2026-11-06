@@ -124,6 +124,27 @@ fn rebuild_xref(b: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn an_alias_into_a_spot_made_process_goes_to_process_too() {
+    let src = pdf_with_spots(PAGE);
+    let acts = actions(&[("PANTONE 185 CV", InkAction::Alias("PANTONE 185 C".into())), ("PANTONE 185 C", InkAction::ToProcess)]);
+    let (out, report) = manage_inks(src.clone(), &acts).expect("inks");
+    assert_eq!(report.converted.get("PANTONE 185 CV"), Some(&2), "{report:?}");
+    assert!(report.aliased.is_empty(), "{report:?}");
+    let doc = Document::open(Arc::new(out.clone())).expect("open");
+    let names: Vec<String> = crate::analyze(&doc).inks.spots.iter().map(|i| i.name.clone()).collect();
+    assert!(!names.iter().any(|n| n.starts_with("PANTONE")), "{names:?}");
+    assert!(max_channel_diff(&render(&src), &render(&out)) <= 2);
+}
+
+#[test]
+fn alias_cycles_change_nothing() {
+    let src = pdf_with_spots(PAGE);
+    let acts = actions(&[("PANTONE 185 CV", InkAction::Alias("PANTONE 185 C".into())), ("PANTONE 185 C", InkAction::Alias("PANTONE 185 CV".into()))]);
+    let (out, _) = manage_inks(src.clone(), &acts).expect("inks");
+    assert_eq!(out, src);
+}
+
+#[test]
 fn nothing_to_do_returns_the_same_bytes() {
     let src = pdf_with_spots(PAGE);
     let (out, _) = manage_inks(src.clone(), &BTreeMap::new()).expect("inks");
