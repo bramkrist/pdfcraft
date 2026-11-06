@@ -779,6 +779,36 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc", "path"],
         )),
         t(
+            "doc_impose_manual",
+            "Impose pages by hand",
+            "Place the document's pages on press sheets by hand and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over), as a press room's manual imposition does. sheets is an array of sheet sides in output order, each an array of { page (1-based), x_mm, y_mm, turn }: x_mm and y_mm put the lower-left corner of the page's footprint (bleed included, after turning) that far from the sheet's lower-left corner; turn is 0, 90, 180 or 270 degrees anticlockwise (-90 is 270). A page may appear any number of times and a side may be empty (a blank back). Sheet: by name (A5, A4, A3, A3+, SRA4, SRA3, 12x18, 13x19) or sheet_width_mm and sheet_height_mm; landscape turns it sideways. bleed_mm is the bleed already inside each page; marks, mark_length_mm, mark_offset_mm, mark_style, mark_width_pt and mark_registration draw trim marks as doc_impose does, around every placed page, never across another page's finished area. Pages partly off the sheet are cropped at its edge; a page wholly off it, a page the document does not have or another turn is refused and nothing is written. Not yet: scaling a placed page, per-page bleed, creep.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "sheets": { "type": "array", "items": { "type": "array", "items": { "type": "object", "properties": {
+                    "page": { "type": "integer", "minimum": 1 },
+                    "x_mm": { "type": "number" },
+                    "y_mm": { "type": "number" },
+                    "turn": { "type": "integer", "enum": [0, 90, 180, 270, -90] },
+                }, "required": ["page", "x_mm", "y_mm"] } } },
+                "sheet": { "type": "string" },
+                "sheet_width_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "sheet_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "landscape": { "type": "boolean" },
+                "bleed_mm": { "type": "number", "minimum": 0 },
+                "marks": { "type": "boolean" },
+                "mark_length_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "mark_offset_mm": { "type": "number" },
+                "mark_style": { "type": "string", "enum": ["corner", "japanese"] },
+                "mark_width_pt": { "type": "number", "exclusiveMinimum": 0 },
+                "mark_registration": { "type": "boolean" },
+                "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
+            }),
+            &["doc", "path", "sheets"],
+        )),
+        t(
             "doc_bleed",
             "Add bleed",
             "Add bleed around every page and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). The page's current edge is taken as the trim: each page grows by bleed_mm on every side (or left_mm, bottom_mm, right_mm, top_mm for single sides; a side-specific value wins) and gets a TrimBox at the old edge and a BleedBox around the whole new page. method mirror (default): each edge strip is reflected outward across the edge and the corners across both, so the artwork continues as its own mirror image; the bleed must be smaller than the page. scale: the page is enlarged about its centre until it covers page plus bleed, so the trim then crops slightly into the artwork. Not yet: taking an existing TrimBox as the edge, extending edge colours, removing or cropping a bleed.",

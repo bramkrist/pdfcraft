@@ -16,6 +16,8 @@
 //! - **Trim marks**: corner or Japanese (tombo) marks around every finished page, optionally running
 //!   into the page (negative offset), in black or registration colour.
 //! - **Bleed** ([`add_bleed`]): mirrored or scaled margin around every page, with a `TrimBox`.
+//! - **Manual** ([`manual()`]): every page placed by hand, turned in quarter turns, with marks
+//!   worked out as for step & repeat.
 //! - **Booklets** ([`booklet()`]): saddle-stitched, perfect-bound (signatures) and continuous page
 //!   order, two pages to a sheet side.
 //!
@@ -25,9 +27,11 @@
 
 mod bleed;
 mod booklet;
+mod manual;
 
 pub use bleed::{AddBleed, BleedMethod, add_bleed};
 pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
+pub use manual::{Manual, ManualPage, manual};
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::Document;
@@ -56,6 +60,12 @@ pub enum ImposeError {
     /// The layout would be larger than [`MAX_CELLS_PER_SHEET`] or [`MAX_SHEETS`].
     #[error("the layout is too large: {0}")]
     TooLarge(&'static str),
+    /// A manual layout names a page the document does not have (1-based).
+    #[error("page {page} does not exist: the document has {pages} page(s)")]
+    NoSuchPage { page: usize, pages: usize },
+    /// A page of a manual layout lies wholly off the sheet (1-based).
+    #[error("page {page} lies wholly off the sheet")]
+    OffSheet { page: usize },
 }
 
 /// How source pages fill the cells of a sheet.
@@ -610,6 +620,13 @@ pub fn booklet_document(src: &Document, spec: &Booklet, content: Content) -> Res
     Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
 }
 
+/// Lay out pages of `src` by hand as `spec` says and write the sheets as a print-ready PDF (see
+/// [`impose_document`] for annotations and encryption).
+pub fn manual_document(src: &Document, spec: &Manual, content: Content) -> Result<Vec<u8>, DocumentError> {
+    let sheets = manual(&pdfcraft_print::page_sizes(src), spec)?;
+    Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
+}
+
 /// Add bleed to every page of `src` by `spec` and write the pages (each with a `TrimBox` at the
 /// old edge) as a PDF (see [`impose_document`] for annotations and encryption).
 pub fn bleed_document(src: &Document, spec: &AddBleed, content: Content) -> Result<Vec<u8>, DocumentError> {
@@ -621,5 +638,7 @@ pub fn bleed_document(src: &Document, spec: &AddBleed, content: Content) -> Resu
 mod bleed_tests;
 #[cfg(test)]
 mod booklet_tests;
+#[cfg(test)]
+mod manual_tests;
 #[cfg(test)]
 mod tests;

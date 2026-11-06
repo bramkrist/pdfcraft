@@ -13,7 +13,9 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
-use pdfcraft_impose::{AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat};
+use pdfcraft_impose::{
+    AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks, StepRepeat,
+};
 use pdfcraft_print::{Content, Sheet};
 use serde::{Deserialize, Serialize};
 
@@ -32,8 +34,8 @@ fn mm(pt: f64) -> f64 {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct Job {
-    /// `repeat` (step & repeat), `sequential` (n-up), `cut-stack` (unique collate), `booklet`
-    /// or `bleed`.
+    /// `repeat` (step & repeat), `sequential` (n-up), `cut-stack` (unique collate), `booklet`,
+    /// `bleed` or `manual`.
     pub mode: String,
     /// Press sheet width and height (portrait or landscape as given).
     pub sheet_mm: Option<[f64; 2]>,
@@ -72,9 +74,26 @@ pub struct Job {
     pub add_bleed_mm: Option<MarginMm>,
     /// Generated bleed: `mirror` (default) or `scale`.
     pub method: Option<String>,
+    /// Manual: the pages on each sheet side, placed by hand.
+    pub manual: Option<Vec<Vec<ManualCellMm>>>,
     /// What prints besides page content: `document` (default), `document-and-markups`,
     /// `document-and-stamps`, `form-fields-only`.
     pub comments_forms: Option<String>,
+}
+
+/// One page of a manual layout.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ManualCellMm {
+    /// 0-based source page.
+    pub page: usize,
+    /// Lower-left corner of the page's footprint (bleed included, after turning), from the
+    /// sheet's lower-left corner.
+    pub x_mm: f64,
+    pub y_mm: f64,
+    /// Degrees anticlockwise: 0, 90, 180 or 270 (-90 is 270).
+    #[serde(default)]
+    pub turn: i32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -122,7 +141,7 @@ pub struct Cell {
     pub rect_mm: [f64; 4],
     /// The page is reflected left-right or top-bottom (generated bleed strips).
     pub mirrored: bool,
-    /// Quarter turn of the page in degrees: 90 anticlockwise, -90 clockwise, 0 upright.
+    /// Turn of the page in degrees: 90 anticlockwise, -90 clockwise, 180, or 0 upright.
     pub turn: i32,
 }
 
@@ -180,7 +199,12 @@ fn step_repeat(job: &Job, fill: Fill) -> Result<StepRepeat, String> {
         Some(d) => return Err(bad(format!("unknown duplex {d:?}"))),
     };
     s.rotate = job.rotate.unwrap_or(false);
-    s.marks = match &job.marks {
+    s.marks = marks(job)?;
+    Ok(s)
+}
+
+fn marks(job: &Job) -> Result<Option<Marks>, String> {
+    Ok(match &job.marks {
         None | Some(MarksMm::On(false)) => None,
         Some(MarksMm::On(true)) => Some(Marks::default()),
         Some(MarksMm::Custom(m)) => {
@@ -197,8 +221,30 @@ fn step_repeat(job: &Job, fill: Fill) -> Result<StepRepeat, String> {
                 registration: m.registration.unwrap_or(false),
             })
         }
-    };
-    Ok(s)
+    })
+}
+
+fn manual_spec(job: &Job) -> Result<Manual, String> {
+    let [w, h] = job.sheet_mm.ok_or_else(|| bad("sheet_mm is required"))?;
+    let sheets = job.manual.as_ref().ok_or_else(|| bad("manual: the pages of each sheet are required"))?;
+    let sheets = sheets
+        .iter()
+        .map(|side| {
+            side.iter()
+                .map(|c| {
+                    let turns = match c.turn.rem_euclid(360) {
+                        0 => 0,
+                        90 => 1,
+                        180 => 2,
+                        270 => 3,
+                        t => return Err(bad(format!("manual: turn must be 0, 90, 180 or 270, not {t}"))),
+                    };
+                    Ok(ManualPage { page: c.page, at: (pt(c.x_mm), pt(c.y_mm)), turns })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Manual { sheet: (pt(w), pt(h)), bleed: pt(job.bleed_mm.unwrap_or(0.0)), marks: marks(job)?, sheets })
 }
 
 fn booklet(job: &Job) -> Result<Booklet, String> {
@@ -265,12 +311,14 @@ fn sheets_as_given(sizes: &[(f64, f64)], job: &Job) -> Result<Vec<Sheet>, String
         "cut-stack" => pdfcraft_impose::step_and_repeat(sizes, &step_repeat(job, Fill::CutStack { copies: job.copies.unwrap_or(1) })?),
         "booklet" => pdfcraft_impose::booklet(sizes, &booklet(job)?),
         "bleed" => pdfcraft_impose::add_bleed(sizes, &add_bleed(job)?),
+        "manual" => pdfcraft_impose::manual(sizes, &manual_spec(job)?),
         m => return Err(bad(format!("unknown mode {m:?}"))),
     };
     r.map_err(|e| e.to_string())
 }
 
-fn describe(sheets: &[Sheet]) -> Layout {
+/// `strips`: the sheets are pages with generated bleed, whose reflected parts are not ups.
+fn describe(sheets: &[Sheet], strips: bool) -> Layout {
     let out: Vec<SheetOut> = sheets
         .iter()
         .map(|s| SheetOut {
@@ -289,15 +337,20 @@ fn describe(sheets: &[Sheet]) -> Layout {
                         x1 = x1.max(x);
                         y1 = y1.max(y);
                     }
-                    // Quarter turns: 90 anticlockwise, -90 clockwise, 0 upright.
+                    // Quarter turns: 90 anticlockwise, -90 clockwise, 180 upside down, 0 upright.
                     let turn = if b > 0.5 {
                         90
                     } else if b < -0.5 {
                         -90
+                    } else if a < -0.5 && d < -0.5 && !strips {
+                        180
                     } else {
                         0
                     };
-                    Cell { page: p.page, rect_mm: [mm(x0), mm(y0), mm(x1), mm(y1)], mirrored: turn == 0 && (a < 0.0 || d < 0.0), turn }
+                    // Generated bleed strips are reflections of the page (a corner strip in both
+                    // directions); anything else upside down is a half turn.
+                    let mirrored = if strips { turn == 0 && (a < 0.0 || d < 0.0) } else { a * d - b * c < 0.0 };
+                    Cell { page: p.page, rect_mm: [mm(x0), mm(y0), mm(x1), mm(y1)], mirrored, turn }
                 })
                 .collect(),
             marks_mm: s.lines.iter().map(|l| [mm(l[0]), mm(l[1]), mm(l[2]), mm(l[3])]).collect(),
@@ -314,7 +367,7 @@ fn describe(sheets: &[Sheet]) -> Layout {
 /// The layout of `job` for pages of these sizes (millimetres), without any PDF.
 pub fn layout(pages_mm: &[[f64; 2]], job: &Job) -> Result<Layout, String> {
     let sizes: Vec<(f64, f64)> = pages_mm.iter().map(|[w, h]| (pt(*w), pt(*h))).collect();
-    Ok(describe(&sheets(&sizes, job)?))
+    Ok(describe(&sheets(&sizes, job)?, job.mode == "bleed"))
 }
 
 fn open(pdf: Vec<u8>) -> Result<Document, String> {
@@ -330,7 +383,7 @@ pub fn page_sizes(pdf: Vec<u8>) -> Result<Vec<[f64; 2]>, String> {
 /// The layout `job` makes of `pdf`, for a preview before imposing.
 pub fn layout_pdf(pdf: Vec<u8>, job: &Job) -> Result<Layout, String> {
     let doc = open(pdf)?;
-    Ok(describe(&sheets(&pdfcraft_print::page_sizes(&doc), job)?))
+    Ok(describe(&sheets(&pdfcraft_print::page_sizes(&doc), job)?, job.mode == "bleed"))
 }
 
 /// The imposed PDF. Page content, images, fonts and colour spaces are placed, never rewritten.

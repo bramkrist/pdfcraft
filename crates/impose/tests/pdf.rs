@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
-use pdfcraft_impose::{Duplex, Margins, StepRepeat, impose_document};
+use pdfcraft_impose::{Duplex, Manual, ManualPage, Margins, StepRepeat, impose_document, manual_document};
 use pdfcraft_print::Content;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RenderedPage, RequestKind};
 
@@ -208,4 +208,34 @@ fn a_turned_page_renders_turned_not_clipped() {
     // Turned anticlockwise: the page's left (red) is now at the bottom, its right (blue) on top.
     assert_eq!(rgb(&sheet, 20, 80), RED, "bottom of the sheet");
     assert_eq!(rgb(&sheet, 20, 20), BLUE, "top of the sheet");
+}
+
+#[test]
+fn manual_pages_render_where_and_how_they_were_placed() {
+    // 100 x 40 pt page: red left half, blue right half. Sheet 200 x 200: upright at the bottom
+    // left, turned 180 at the top right, a quarter turn clockwise in between.
+    let src = pdf(&[(100, 40, "1 0 0 rg 0 0 50 40 re f 0 0 1 rg 50 0 50 40 re f")]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let spec = Manual {
+        sheet: (200.0, 200.0),
+        bleed: 0.0,
+        marks: None,
+        sheets: vec![vec![
+            ManualPage { page: 0, at: (0.0, 0.0), turns: 0 },
+            ManualPage { page: 0, at: (100.0, 160.0), turns: 2 },
+            ManualPage { page: 0, at: (110.0, 30.0), turns: 3 },
+        ]],
+    };
+    let out = manual_document(&doc, &spec, Content::Document).expect("impose");
+    let s = render(&out, 0);
+    assert_eq!((s.width, s.height), (200, 200));
+    // Image y runs down: sheet y = 200 - image y.
+    assert_eq!(rgb(&s, 20, 180), RED, "upright: left half red");
+    assert_eq!(rgb(&s, 80, 180), BLUE, "upright: right half blue");
+    assert_eq!(rgb(&s, 120, 20), BLUE, "turned 180: its right half now on the left");
+    assert_eq!(rgb(&s, 180, 20), RED);
+    // Clockwise: the page's left (red) goes to the top, its right (blue) to the bottom.
+    assert_eq!(rgb(&s, 130, 200 - 120), RED, "clockwise: red on top");
+    assert_eq!(rgb(&s, 130, 200 - 40), BLUE, "clockwise: blue at the bottom");
+    assert_eq!(rgb(&s, 60, 100), WHITE, "nothing placed there");
 }

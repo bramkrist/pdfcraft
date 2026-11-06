@@ -19,6 +19,13 @@ impl Session {
         crate::impose::booklet_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// The print-ready PDF of document `id` laid out by hand by `spec` (see `pdfcraft-impose`).
+    /// The same permissions and layer rules apply as for [`Session::impose_pdf`].
+    pub fn manual_pdf(&self, id: DocId, spec: &crate::impose::Manual, content: print::Content) -> Result<Vec<u8>, EditError> {
+        let cos = self.imposition_source(id)?;
+        crate::impose::manual_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
+    }
+
     /// The print-ready PDF of document `id` with bleed added around every page (`pdfcraft-impose`):
     /// each page grows by `spec` and gets a `TrimBox` at its old edge. The same permissions and
     /// layer rules apply as for [`Session::impose_pdf`].

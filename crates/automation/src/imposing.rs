@@ -1,8 +1,9 @@
 //! `doc_impose` (step & repeat, gang n-up) and `doc_booklet` (saddle, perfect-bound and continuous
-//! booklets) onto press sheets, and `doc_bleed` (generated bleed).
+//! booklets) onto press sheets, `doc_impose_manual` (every page placed by hand) and `doc_bleed`
+//! (generated bleed).
 
 use pdfcraft_engine::impose::{
-    self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat,
+    self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks, StepRepeat,
 };
 use pdfcraft_engine::print::Content;
 use serde_json::{Value, json};
@@ -71,6 +72,59 @@ fn content_arg(a: &Args) -> Result<Content> {
     })
 }
 
+/// Trim marks from `marks` and the `mark_*` arguments; `None` unless `marks` is true.
+fn marks_arg(a: &Args) -> Result<Option<Marks>> {
+    if !a.opt_bool("marks")?.unwrap_or(false) {
+        return Ok(None);
+    }
+    let default = Marks::default();
+    Ok(Some(Marks {
+        length: mm(a, "mark_length_mm")?.unwrap_or(default.length),
+        offset: mm(a, "mark_offset_mm")?.unwrap_or(default.offset),
+        style: match a.opt_str("mark_style")?.unwrap_or("corner") {
+            "corner" => MarkStyle::Corner,
+            "japanese" => MarkStyle::Japanese,
+            m => return Err(bad(format!("unknown mark_style {m:?}"))),
+        },
+        width: a.opt_num("mark_width_pt")?.unwrap_or(default.width),
+        registration: a.opt_bool("mark_registration")?.unwrap_or(false),
+    }))
+}
+
+/// The `sheets` argument of `doc_impose_manual`: an array of sheet sides, each an array of
+/// `{page (1-based), x_mm, y_mm, turn}`.
+fn manual_sheets(a: &Args) -> Result<Vec<Vec<ManualPage>>> {
+    let sides = a.get("sheets").and_then(Value::as_array).ok_or_else(|| bad("sheets: an array of sheet sides is required"))?;
+    sides
+        .iter()
+        .enumerate()
+        .map(|(i, side)| {
+            let cells = side.as_array().ok_or_else(|| bad(format!("sheets[{i}] must be an array of pages")))?;
+            cells
+                .iter()
+                .map(|c| {
+                    let n = |k: &str| c.get(k).and_then(Value::as_f64);
+                    let page = c
+                        .get("page")
+                        .and_then(Value::as_u64)
+                        .filter(|p| *p >= 1)
+                        .ok_or_else(|| bad(format!("sheets[{i}]: every page needs page (1-based)")))?;
+                    let (x, y) = n("x_mm").zip(n("y_mm")).ok_or_else(|| bad(format!("sheets[{i}]: every page needs x_mm and y_mm")))?;
+                    let turns = match c.get("turn").and_then(Value::as_i64).unwrap_or(0).rem_euclid(360) {
+                        0 => 0,
+                        90 => 1,
+                        180 => 2,
+                        270 => 3,
+                        t => return Err(bad(format!("sheets[{i}]: turn must be 0, 90, 180 or 270, not {t}"))),
+                    };
+                    let page = usize::try_from(page - 1).map_err(|_| bad("page out of range"))?;
+                    Ok(ManualPage { page, at: (x * MM, y * MM), turns })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 impl Automation {
     /// `doc_impose`: lay the document's pages out on press sheets and save the print-ready PDF.
     pub(crate) fn doc_impose(&mut self, a: &Args) -> Result<Value> {
@@ -102,20 +156,7 @@ impl Automation {
             d => return Err(bad(format!("unknown duplex {d:?}"))),
         };
         spec.rotate = a.opt_bool("rotate")?.unwrap_or(false);
-        if a.opt_bool("marks")?.unwrap_or(false) {
-            let default = Marks::default();
-            spec.marks = Some(Marks {
-                length: mm(a, "mark_length_mm")?.unwrap_or(default.length),
-                offset: mm(a, "mark_offset_mm")?.unwrap_or(default.offset),
-                style: match a.opt_str("mark_style")?.unwrap_or("corner") {
-                    "corner" => MarkStyle::Corner,
-                    "japanese" => MarkStyle::Japanese,
-                    m => return Err(bad(format!("unknown mark_style {m:?}"))),
-                },
-                width: a.opt_num("mark_width_pt")?.unwrap_or(default.width),
-                registration: a.opt_bool("mark_registration")?.unwrap_or(false),
-            });
-        }
+        spec.marks = marks_arg(a)?;
         let content = content_arg(a)?;
         let sheets = impose::step_and_repeat(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
         let up = sheets.iter().map(|s| s.placed.len()).max().unwrap_or(0);
@@ -165,6 +206,21 @@ impl Automation {
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
         Ok(json!({ "pages": sizes.len(), "sides": sides.len(), "bytes": bytes.len(), "path": path.to_string_lossy() }))
+    }
+
+    /// `doc_impose_manual`: place pages on sheets by hand and save the print-ready PDF.
+    pub(crate) fn doc_impose_manual(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        let spec = Manual { sheet: sheet_size(a)?, bleed: mm(a, "bleed_mm")?.unwrap_or(0.0), marks: marks_arg(a)?, sheets: manual_sheets(a)? };
+        let content = content_arg(a)?;
+        let sheets = impose::manual(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
+        let bytes = self.session.manual_pdf(id, &spec, content).map_err(failed)?;
+        let path = self.resolve(a.str("path")?, true)?;
+        write_atomic(&path, &bytes)?;
+        let placed: usize = sheets.iter().map(|s| s.placed.len()).sum();
+        Ok(json!({ "sheets": sheets.len(), "placed": placed, "bytes": bytes.len(), "path": path.to_string_lossy() }))
     }
 
     /// `doc_bleed`: add bleed around every page and save the print-ready PDF.

@@ -119,3 +119,37 @@ fn best_orientation_and_rotation_fit_more() {
     assert!(((t.rect_mm[2] - t.rect_mm[0]) - 50.8).abs() < 1e-6, "{:?}", t.rect_mm);
     assert!(layout(&[[10.0, 10.0]], &job(r#"{"mode":"repeat","sheet_mm":[100,100],"sheet_orientation":"sideways"}"#)).is_err());
 }
+
+#[test]
+fn a_manual_layout_round_trips_through_the_layout_description() {
+    // Two 93 x 57 mm cards with 3 mm bleed: one upright, one upside down, one turned clockwise;
+    // a second, empty sheet side for the back.
+    let j = job(r#"{"mode":"manual","sheet_mm":[320,480],"bleed_mm":3,"marks":true,"manual":[[
+            {"page":0,"x_mm":10,"y_mm":10},
+            {"page":0,"x_mm":110,"y_mm":10,"turn":180},
+            {"page":0,"x_mm":10,"y_mm":100,"turn":-90}
+        ],[]]}"#);
+    let l = layout(&[[93.0, 57.0]], &j).expect("layout");
+    assert_eq!(l.sheet_count, 2);
+    assert_eq!(l.up_per_sheet, 3);
+    let cells = &l.sheets[0].cells;
+    let turns: Vec<i32> = cells.iter().map(|c| c.turn).collect();
+    assert_eq!(turns, vec![0, 180, -90]);
+    assert!(cells.iter().all(|c| !c.mirrored), "turning is not mirroring");
+    let r = cells[2].rect_mm;
+    assert!((r[0] - 10.0).abs() < 1e-6 && (r[1] - 100.0).abs() < 1e-6 && (r[2] - 67.0).abs() < 1e-6 && (r[3] - 193.0).abs() < 1e-6, "{r:?}");
+    assert!(!l.sheets[0].marks_mm.is_empty());
+    // The real PDF has two sheet sides too.
+    let out = impose(pdf(1, 264, 162), &j).expect("impose");
+    assert_eq!(page_sizes(out).expect("sizes").len(), 2);
+}
+
+#[test]
+fn manual_mistakes_are_errors() {
+    let bad = |m: &str| layout(&[[50.0, 50.0]], &job(&format!(r#"{{"mode":"manual","sheet_mm":[100,100],"manual":{m}}}"#)));
+    assert!(bad(r#"[[{"page":0,"x_mm":0,"y_mm":0,"turn":45}]]"#).is_err_and(|e| e.contains("turn")));
+    assert!(bad(r#"[[{"page":4,"x_mm":0,"y_mm":0}]]"#).is_err_and(|e| e.contains("page 5")));
+    assert!(bad(r#"[[{"page":0,"x_mm":200,"y_mm":0}]]"#).is_err_and(|e| e.contains("off the sheet")));
+    assert!(parse_job(r#"{"mode":"manual","sheet_mm":[100,100],"manual":[[{"page":0,"x":0,"y_mm":0}]]}"#).is_err());
+    assert!(layout(&[[50.0, 50.0]], &job(r#"{"mode":"manual","sheet_mm":[100,100]}"#)).is_err());
+}

@@ -8263,6 +8263,18 @@ evidence = ["crates/prepress/src/inks_tests.rs::spot_to_process_prints_its_own_a
 notes = "pdfcraft-prepress::inks. Alias renames the colorant in every Separation and DeviceN colour space (values untouched; refused when it would list a colorant twice). To process rewrites cs/scn/CS/SCN in page and form content into k/rg/g with the spot's own alternate, evaluated through its tint transform (Type 2 directly, Type 0/4 through the renderer's function evaluator), tracking q/Q; everything else is copied byte for byte and saved incrementally. Checked by rendering: at most 2/255 per channel differs on a page with Type 2 and Type 4 spots in fills, strokes and a form, and a 20% tint error is caught. Kept and reported: images, shadings and patterns in the spot, DeviceN mixes, alternates other than DeviceCMYK/RGB/Gray. Not yet: an automation tool, converting images and shadings, annotation appearances, Acrobat's per-session (print-time only) ink mapping."
 
 [[feature]]
+id = "print.manual-imposition"
+title = "Manual imposition: place, turn and repeat pages on press sheets by hand, with trim marks"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = ["doc_impose_manual"]
+evidence = ["crates/impose/src/manual_tests.rs::every_turn_lands_the_page_exactly_on_its_footprint", "crates/impose/tests/pdf.rs::manual_pages_render_where_and_how_they_were_placed", "crates/automation/tests/it/automation.rs::manual_imposition_through_tools", "apps/impose-web/src/tests.rs::a_manual_layout_round_trips_through_the_layout_description"]
+notes = "pdfcraft-impose::manual places each page by the lower-left corner of its footprint and 0/90/180/270 degree turns (checked by rendering every turn), any page any number of times, empty sides allowed, pages partly off the sheet cropped at its edge; trim marks come from the placed trims as for step & repeat. impose-web adds a drag-and-snap editor (edges of other pages, their trims and the sheet), numeric trim positions, keyboard nudges and a start from the automatic layout. Not yet: scaling a placed page, per-page bleed, creep, saving manual layouts as templates."
+
+[[feature]]
 id = "print.page-range"
 title = "Print all, current page or a range (labels allowed)"
 area = "L"

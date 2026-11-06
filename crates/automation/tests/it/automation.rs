@@ -5259,6 +5259,35 @@ fn cut_and_stack_through_tools() {
 }
 
 #[test]
+fn manual_imposition_through_tools() {
+    let dir = workdir("manual");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(
+        &mut a,
+        "doc_impose_manual",
+        json!({ "doc": doc, "sheet": "SRA3", "landscape": true, "marks": true, "path": "m.pdf", "sheets": [
+            [{ "page": 1, "x_mm": 10, "y_mm": 10 }, { "page": 1, "x_mm": 250, "y_mm": 10, "turn": 90 }],
+            []
+        ] }),
+    );
+    assert_eq!((r["sheets"].as_u64(), r["placed"].as_u64()), (Some(2), Some(2)));
+    let out = ok(&mut a, "doc_open", json!({ "path": "m.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": out }))["document"]["pages"].as_u64(), Some(2));
+    for bad in [
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf", "sheets": [[{ "page": 99, "x_mm": 0, "y_mm": 0 }]] }),
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf", "sheets": [[{ "page": 1, "x_mm": 0, "y_mm": 0, "turn": 45 }]] }),
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf", "sheets": [[{ "page": 1, "x_mm": 9000, "y_mm": 0 }]] }),
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf", "sheets": [[{ "page": 0, "x_mm": 0, "y_mm": 0 }]] }),
+        json!({ "doc": doc, "sheet": "SRA3", "path": "x.pdf", "sheets": [] }),
+    ] {
+        assert!(matches!(a.call("doc_impose_manual", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
 fn adding_bleed_through_tools() {
     let dir = workdir("bleed");
     let mut a = auto(&dir);
