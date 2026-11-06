@@ -1,0 +1,70 @@
+name: impose-web
+
+# Fork-only (bramkrist/pdfcraft): builds apps/impose-web to WebAssembly and publishes the
+# browser bundle to the `impose-web-dist` branch, from which impose.pixelindie.com and the
+# PIXELINDIE POS take it. Not part of upstream CI.
+on:
+  push:
+    branches: [feat/impose-step-repeat]
+    paths:
+      - "apps/impose-web/**"
+      - "crates/impose/**"
+      - "crates/print/**"
+      - "Cargo.lock"
+      - ".github/workflows/impose-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: impose-web
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust with the wasm32 target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/wasm-bindgen
+            target
+          key: impose-web-${{ hashFiles('Cargo.lock') }}
+      - name: wasm-bindgen CLI matching Cargo.lock
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = |"/,""); print; exit}' Cargo.lock)
+          if ! wasm-bindgen --version 2>/dev/null | grep -q " $v"; then cargo install wasm-bindgen-cli --version "$v" --locked --force; fi
+      - name: Test natively
+        run: cargo test -p pdfcraft-impose-web -p pdfcraft-impose --locked
+      - name: Build wasm
+        run: cargo build -p pdfcraft-impose-web --release --target wasm32-unknown-unknown --locked
+      - name: Bind for the browser
+        run: |
+          wasm-bindgen --target web --out-dir out target/wasm32-unknown-unknown/release/pdfcraft_impose_web.wasm
+          echo "{\"commit\":\"${GITHUB_SHA}\",\"built\":\"$(date -u +%FT%TZ)\"}" > out/build.json
+          ls -la out
+      - name: Publish to impose-web-dist
+        run: |
+          git config user.name "impose-web build"
+          git config user.email "actions@users.noreply.github.com"
+          cp -r out /tmp/out
+          git fetch origin impose-web-dist || true
+          if git rev-parse --verify origin/impose-web-dist >/dev/null 2>&1; then
+            git checkout -B impose-web-dist origin/impose-web-dist
+          else
+            git checkout --orphan impose-web-dist
+          fi
+          git rm -rf --quiet . || true
+          git clean -fdx --quiet -e /tmp/out
+          cp -r /tmp/out/. .
+          git add -A
+          git commit -m "impose-web build of ${GITHUB_SHA}" || { echo "nothing changed"; exit 0; }
+          git push origin impose-web-dist

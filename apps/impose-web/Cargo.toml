@@ -1,0 +1,21 @@
+[package]
+name = "pdfcraft-impose-web"
+description = "pdfcraft-impose for the browser: layout previews and imposed PDFs through wasm-bindgen (impose.pixelindie.com and the PIXELINDIE POS)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pdfcraft-cos = { workspace = true }
+pdfcraft-impose = { workspace = true }
+pdfcraft-print = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "0.2"

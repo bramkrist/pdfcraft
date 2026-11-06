@@ -91,6 +91,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("pdfcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    ("impose-web", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
