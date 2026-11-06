@@ -515,3 +515,14 @@ fn centred_marks_cross_the_outer_corners_and_mark_the_cuts_between_pages() {
     // 4 outer corners x 2 + 2 cut lines on each of 4 sides / 2 = 8 + 4.
     assert_eq!(lines.len(), 12, "{lines:?}");
 }
+
+#[test]
+fn a_page_rounded_a_hair_over_the_room_still_fits() {
+    // 2 x 105 mm pages written as 297.64 pt each: 595.28 pt against a 595.2756 pt (210 mm) sheet.
+    let mut s = StepRepeat::new((595.2756, 841.8898));
+    s.margins = Margins::uniform(0.0);
+    let sheets = step_and_repeat(&[(595.28, 419.53)], &s).expect("rounding is not a reason to refuse");
+    assert_eq!(sheets[0].placed.len(), 2);
+    // A real overrun is still refused.
+    assert!(matches!(step_and_repeat(&[(596.0, 419.53)], &s), Err(ImposeError::DoesNotFit { .. })));
+}

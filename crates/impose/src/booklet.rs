@@ -157,7 +157,7 @@ pub fn booklet(sizes: &[(f64, f64)], spec: &Booklet) -> Result<Vec<Sheet>, Impos
     if !(scale.is_finite() && scale > 0.0) {
         return Err(ImposeError::Invalid("scale", "greater than zero"));
     }
-    if !spec.scale && (max_w > half_w + crate::EPS || max_h > area_h + crate::EPS) {
+    if !spec.scale && (max_w > half_w + crate::FIT_TOLERANCE || max_h > area_h + crate::FIT_TOLERANCE) {
         return Err(ImposeError::DoesNotFit { cell_w: max_w, cell_h: max_h, area_w: half_w, area_h });
     }
     let all = sides(sizes.len(), spec.binding)?;

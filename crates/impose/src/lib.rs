@@ -203,6 +203,11 @@ type Rect = [f64; 4];
 
 const EPS: f64 = 1e-6;
 
+/// How far a page may overrun the room it is given and still count as fitting, in points
+/// (0.05 pt = 0.018 mm): PDF files round their sizes, so a 105 mm page doubled is 0.005 pt more
+/// than a 210 mm sheet, and a layout must not be refused for that.
+pub(crate) const FIT_TOLERANCE: f64 = 0.05;
+
 fn positive(v: f64, what: &'static str) -> Result<(), ImposeError> {
     if v.is_finite() && v > 0.0 { Ok(()) } else { Err(ImposeError::Invalid(what, "greater than zero")) }
 }
@@ -247,7 +252,7 @@ fn validate(spec: &StepRepeat, sizes: &[(f64, f64)]) -> Result<(), ImposeError> 
 
 /// How many cells of `cell` plus `gap` fit in `room`.
 fn fit_count(room: f64, cell: f64, gap: f64) -> usize {
-    let n = ((room + gap) / (cell + gap) + EPS).floor();
+    let n = ((room + gap + FIT_TOLERANCE) / (cell + gap) + EPS).floor();
     if n.is_finite() && n >= 1.0 { n as usize } else { 0 }
 }
 
