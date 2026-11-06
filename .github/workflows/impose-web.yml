@@ -8,8 +8,7 @@ on:
     branches: [feat/impose-step-repeat]
     paths:
       - "apps/impose-web/**"
-      - "crates/impose/**"
-      - "crates/print/**"
+      - "crates/**"
       - "Cargo.lock"
       - ".github/workflows/impose-web.yml"
   workflow_dispatch:
