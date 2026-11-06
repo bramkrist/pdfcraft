@@ -1,0 +1,69 @@
+name: pdfcraft-web
+
+# Fork-only (bramkrist/pdfcraft): builds apps/pdfcraft-web (the full PdfCraft UI in the browser)
+# with trunk and publishes the static site to the `pdfcraft-web-dist` branch, from which
+# impose.pixelindie.com takes it. Not part of upstream CI.
+on:
+  push:
+    branches: [feat/impose-step-repeat]
+    paths:
+      - "apps/pdfcraft-web/**"
+      - "crates/**"
+      - "Cargo.lock"
+      - ".github/workflows/pdfcraft-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pdfcraft-web
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust with the wasm32 target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pdfcraft-web-${{ hashFiles('Cargo.lock') }}
+          restore-keys: pdfcraft-web-
+      - name: trunk
+        run: |
+          curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin trunk
+          trunk --version
+      - name: Build
+        run: |
+          cd apps/pdfcraft-web
+          trunk build --release
+          cd ../..
+          echo "{\"commit\":\"${GITHUB_SHA}\",\"built\":\"$(date -u +%FT%TZ)\"}" > dist/web/build.json
+          ls -la dist/web
+          du -sh dist/web
+      - name: Publish to pdfcraft-web-dist
+        run: |
+          git config user.name "pdfcraft-web build"
+          git config user.email "actions@users.noreply.github.com"
+          cp -r dist/web /tmp/site
+          git fetch origin pdfcraft-web-dist || true
+          if git rev-parse --verify origin/pdfcraft-web-dist >/dev/null 2>&1; then
+            git checkout -B pdfcraft-web-dist origin/pdfcraft-web-dist
+          else
+            git checkout --orphan pdfcraft-web-dist
+          fi
+          git rm -rf --quiet . || true
+          git clean -fdx --quiet
+          cp -r /tmp/site/. .
+          git add -A
+          git commit -m "pdfcraft-web build of ${GITHUB_SHA}" || { echo "nothing changed"; exit 0; }
+          git push origin pdfcraft-web-dist
