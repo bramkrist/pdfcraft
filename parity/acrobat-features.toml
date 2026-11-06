@@ -8239,6 +8239,18 @@ evidence = ["crates/prepress/src/tests.rs::the_usual_problems_are_all_found", "c
 notes = "pdfcraft-prepress interprets content streams for the graphics state only (matrix, colours, line width, text size), following forms with their matrices and stopping at cycles. Reports page boxes and bleed per side, fonts (embedded, subset, Type 3), images with effective resolution where placed and images that are not in the file (/F, OPI, broken references), process inks used, spot colours by name (finishing layers such as CutContour told apart), registration colour, RGB/Lab/ICC, small rich-black text, hairlines, transparency, overprint, the largest vector ink total and the output intent; checks() judges them with PIXELINDIE's upload-preflight thresholds. Read-only. Not yet: an automation tool, ink totals inside images (needs rendering), separation preview, ink manager edits (spot to process, aliases), outline text, transparency flattening."
 
 [[feature]]
+id = "print.outline-text"
+title = "Convert text to outlines (embedded fonts) without changing how pages look"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/prepress/src/outline_tests.rs::embedded_text_becomes_paths_that_look_the_same", "crates/prepress/src/outline_tests.rs::text_in_a_font_that_is_not_embedded_stays_text_and_is_reported", "crates/prepress/src/outline_tests.rs::clipping_and_invisible_text"]
+notes = "pdfcraft-prepress::outline records glyphs through the renderer's interpreter (so encodings, CID maps, spacing and every embedded font format it reads are resolved as they render), maps them back onto each BT..ET block by counting glyph draws, and replaces the block with one form XObject per distinct glyph shape placed with the glyph's matrix, keeping colour, graphics-state, text-state and marked-content operators in place. Everything else is copied byte for byte and saved incrementally. Checked by rendering: 0.0000% of pixels differ on 241 pages of five real files (a 174-page manual, LaTeX Type 1 docs, a TrueType showcase). Kept as text and reported: fonts that are not embedded, Type 3 fonts, clipping text, pages whose glyph count does not map exactly. Not yet: an automation tool, outlining annotation appearances, removing now-unused font resources."
+
+[[feature]]
 id = "print.page-range"
 title = "Print all, current page or a range (labels allowed)"
 area = "L"

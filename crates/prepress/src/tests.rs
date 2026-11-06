@@ -173,3 +173,15 @@ fn process_images_count_as_inks_but_not_as_ink_totals() {
     assert!(r.inks.cyan && r.inks.black);
     assert_eq!(r.pages.first().map(|p| p.max_tac), Some(0.0));
 }
+
+#[test]
+fn a_font_that_is_selected_but_never_shows_text_is_not_a_problem() {
+    // After outlining, `Tf` may remain outside text objects with nothing drawn in that font.
+    let doc = open(build(
+        &[("<< /Font << /F1 3 0 R >> >>", "/F1 12 Tf 0 0 10 10 re f", "")],
+        &["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"],
+        "",
+    ));
+    let r = analyze(&doc);
+    assert!(r.fonts.is_empty(), "{:?}", r.fonts);
+}

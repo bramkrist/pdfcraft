@@ -20,6 +20,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod outline;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pdfcraft_content::{Matrix, parse};
@@ -285,6 +287,8 @@ struct State {
     line_width: f64,
     font_size: f64,
     text_scale: f64,
+    /// The font resource last selected with `Tf`; noted when text is shown with it.
+    font: Option<Vec<u8>>,
 }
 
 struct Walker<'a> {
@@ -583,9 +587,7 @@ impl<'a> Walker<'a> {
                 }
                 b"Tf" => {
                     st.font_size = num(o.get(1));
-                    if let Some(n) = o.first().and_then(Object::as_name) {
-                        self.note_font(res, n);
-                    }
+                    st.font = o.first().and_then(Object::as_name).map(<[u8]>::to_vec);
                 }
                 b"Tm" => {
                     if let Some(m) = Matrix::from_operands(o) {
@@ -593,7 +595,12 @@ impl<'a> Walker<'a> {
                     }
                 }
                 b"BT" => st.text_scale = 1.0,
-                b"Tj" | b"TJ" | b"'" | b"\"" => self.text(&st),
+                b"Tj" | b"TJ" | b"'" | b"\"" => {
+                    if let Some(f) = st.font.clone() {
+                        self.note_font(res, &f);
+                    }
+                    self.text(&st);
+                }
                 b"BI" => {
                     if let Some((dict, _)) = &op.inline {
                         self.image(dict, true, &st.ctm, &st.fill.clone(), res, None);
@@ -772,7 +779,15 @@ pub fn analyze_with(doc: &Document, th: &Thresholds) -> Report {
             // transparent; blending inside is what the walker reports.
         }
         let content = page_content(doc, &page.dict);
-        let st = State { ctm: Matrix::default(), fill: Colour::gray(), stroke: Colour::gray(), line_width: 1.0, font_size: 0.0, text_scale: 1.0 };
+        let st = State {
+            ctm: Matrix::default(),
+            fill: Colour::gray(),
+            stroke: Colour::gray(),
+            line_width: 1.0,
+            font_size: 0.0,
+            text_scale: 1.0,
+            font: None,
+        };
         let mut seen = Vec::new();
         w.run(&content, &res, st, 0, &mut seen);
         if w.report.truncated {

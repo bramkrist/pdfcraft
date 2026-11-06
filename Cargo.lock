@@ -4623,9 +4623,13 @@ dependencies = [
 name = "pdfcraft-prepress"
 version = "0.18.1"
 dependencies = [
+ "hayro",
+ "kurbo 0.13.1",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-render",
  "serde",
 ]
 

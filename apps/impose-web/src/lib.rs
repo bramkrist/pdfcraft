@@ -356,6 +356,11 @@ pub fn preflight(pdf: Vec<u8>) -> Result<Preflight, String> {
     Ok(Preflight { overall: pdfcraft_prepress::overall(&checks), checks, report })
 }
 
+/// Text turned into outlines (see `pdfcraft_prepress::outline`): the new file and what was done.
+pub fn outline(pdf: Vec<u8>) -> Result<(Vec<u8>, pdfcraft_prepress::outline::OutlineReport), String> {
+    pdfcraft_prepress::outline::outline_text(pdf)
+}
+
 fn parse_job(json: &str) -> Result<Job, String> {
     serde_json::from_str(json).map_err(|e| format!("job: {e}"))
 }
@@ -401,6 +406,32 @@ mod wasm {
     #[wasm_bindgen]
     pub fn preflight(pdf: Vec<u8>) -> Result<String, JsError> {
         to_json(&super::preflight(pdf).map_err(js)?)
+    }
+
+    /// The result of [`outline_text`]: the new file and the report as JSON.
+    #[wasm_bindgen]
+    pub struct Outlined {
+        bytes: Vec<u8>,
+        report: String,
+    }
+
+    #[wasm_bindgen]
+    impl Outlined {
+        #[wasm_bindgen(getter)]
+        pub fn bytes(&self) -> Vec<u8> {
+            self.bytes.clone()
+        }
+        #[wasm_bindgen(getter)]
+        pub fn report(&self) -> String {
+            self.report.clone()
+        }
+    }
+
+    /// `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
+    #[wasm_bindgen(js_name = outlineText)]
+    pub fn outline_text(pdf: Vec<u8>) -> Result<Outlined, JsError> {
+        let (bytes, report) = super::outline(pdf).map_err(js)?;
+        Ok(Outlined { bytes, report: to_json(&report)? })
     }
 
     /// The engine version, to show in the UI and record with a job.

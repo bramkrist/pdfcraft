@@ -131,3 +131,6 @@ details { margin-top: var(--sp-3); font-size: 14px; }
 summary { cursor: pointer; font-weight: 600; }
 .bad { color: var(--danger); } .meh { color: #9A6B00; }
 .ack { font-size: 14px; max-width: 360px; }
+
+.fix { display: grid; gap: var(--sp-1); margin: var(--sp-3) 0; }
+.btn.small { padding: 8px 12px; font-size: 14px; }
