@@ -253,6 +253,27 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
     let pages = source_pages(src);
     let sizes: Vec<(f64, f64)> = pages.iter().map(|p| p.display_size(src)).collect();
     let sheets = layout(&sizes, settings)?;
+    write_sheets(src, &pages, &sheets, settings.content)
+}
+
+/// The display size (width, height) of every page of `src`, in order: what a layout needs to
+/// arrange the pages on sheets for [`impose_sheets`].
+pub fn page_sizes(src: &Document) -> Vec<(f64, f64)> {
+    pdfcraft_model::pages(src).iter().map(|p| p.display_size(src)).collect()
+}
+
+/// Write `sheets`, laid out by the caller from [`page_sizes`] (for instance step & repeat in
+/// `pdfcraft-impose`), as a print-ready PDF. Each placement's `page` is a 0-based index into
+/// `src`'s pages; `content` says which annotations print. Same output rules as [`impose`].
+pub fn impose_sheets(src: &Document, sheets: &[Sheet], content: Content) -> Result<Vec<u8>, PrintError> {
+    let pages = source_pages(src);
+    if let Some(bad) = sheets.iter().flat_map(|s| &s.placed).find(|p| p.page >= pages.len()) {
+        return Err(PrintError::Invalid(format!("the layout uses page {} but the document has {}", bad.page.saturating_add(1), pages.len())));
+    }
+    write_sheets(src, &pages, sheets, content)
+}
+
+fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet], content: Content) -> Result<Vec<u8>, PrintError> {
     let mut doc = src.clone();
     // One form per source page used (a page may appear on several sheets: posters).
     let mut forms: std::collections::HashMap<usize, ObjRef> = std::collections::HashMap::new();
@@ -260,14 +281,14 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
     let views: Vec<[f64; 6]> = pages.iter().map(|p| p.view_matrix(src)).collect();
     let pages_root = doc.add(Object::Null);
     let mut kids = Vec::new();
-    for sheet in &sheets {
+    for sheet in sheets {
         let mut c = String::new();
         let mut xo = Dict::new();
         for (i, pl) in sheet.placed.iter().enumerate() {
             let form = match forms.get(&pl.page) {
                 Some(f) => *f,
                 None => {
-                    let f = page_form(&mut doc, &pages, pl.page, settings.content, &mut promoted)?;
+                    let f = page_form(&mut doc, pages, pl.page, content, &mut promoted)?;
                     forms.insert(pl.page, f);
                     f
                 }

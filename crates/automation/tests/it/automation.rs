@@ -5172,6 +5172,44 @@ fn printing_through_tools() {
 }
 
 #[test]
+fn imposing_on_press_sheets_through_tools() {
+    let dir = workdir("impose");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["pages"].as_u64().unwrap();
+    // Gang: consecutive pages fill a 2 x 2 grid, so n pages take ceil(n / 4) sheets.
+    let r = ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "A3", "fill": "sequential", "cols": 2, "rows": 2, "gutter_mm": 5, "path": "gang.pdf" }),
+    );
+    assert_eq!((r["sheets"].as_u64(), r["up"].as_u64()), (Some(n.div_ceil(4)), Some(4.min(n))));
+    let out = ok(&mut a, "doc_open", json!({ "path": "gang.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": out }))["document"]["pages"].as_u64(), Some(n.div_ceil(4)));
+    // Step & repeat: one sheet per page; a duplex pair is a front and a back sheet.
+    let r = ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "SRA3", "duplex": "long-edge", "marks": true, "gutter_mm": 12, "bleed_mm": 0, "path": "repeat.pdf" }),
+    );
+    assert_eq!(r["sheets"].as_u64(), Some(n));
+    for bad in [
+        json!({ "doc": doc }),
+        json!({ "doc": doc, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "Tabloid-ish", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "sheet_width_mm": 100, "sheet_height_mm": 100, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cols": 50, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cols": 0, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cell_width_mm": 50, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "duplex": "sideways", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "margin_mm": -1, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_impose", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();

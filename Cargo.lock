@@ -4416,6 +4416,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-geom",
+ "pdfcraft-impose",
  "pdfcraft-js",
  "pdfcraft-measure",
  "pdfcraft-model",
@@ -4483,6 +4484,17 @@ dependencies = [
 [[package]]
 name = "pdfcraft-geom"
 version = "0.18.1"
+
+[[package]]
+name = "pdfcraft-impose"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-print",
+ "pdfcraft-render",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "pdfcraft-js"

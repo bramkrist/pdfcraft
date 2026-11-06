@@ -1,0 +1,18 @@
+[package]
+name = "pdfcraft-impose"
+description = "Print-production imposition: step & repeat, n-up with gutters, duplex back-side mirroring and trim marks, laid out as sheets for pdfcraft-print"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-content = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-print = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pdfcraft-render = { workspace = true }

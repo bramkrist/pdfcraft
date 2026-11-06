@@ -718,6 +718,37 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_impose",
+            "Impose on press sheets",
+            "Lay the document's pages out on press sheets and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). fill repeat (default): every page is repeated across a grid on its own sheet (step & repeat: business cards, labels); sequential: consecutive pages fill the grid in reading order (n-up, ganging). Sheet: sheet by name (A5, A4, A3, A3+, SRA4, SRA3, 12x18, 13x19) or sheet_width_mm and sheet_height_mm; landscape turns it sideways. cols and rows default to as many as fit; the grid is centred inside margin_mm (default 10), with gutter_mm between cells (or gutter_x_mm and gutter_y_mm). cell_width_mm and cell_height_mm fix the cell (default: the page size; the largest page for sequential); a smaller page is centred in its cell and a larger one is clipped to it. bleed_mm is the bleed already inside each page: trim marks sit outside it. marks draws corner trim marks around every page (mark_length_mm, mark_offset_mm, default 3 mm each); a mark that would run over a page or off the sheet is left out, so leave a gutter wider than twice the bleed plus the mark offset to get marks between cells. duplex long-edge or short-edge: pages come in front/back pairs (repeat) or front/back chunks (sequential) and each back sheet mirrors its front, so every back cell lies exactly behind its front cell when the sheet is turned over that edge. Refuses a layout that does not fit instead of shrinking it. Not yet: creep, work-and-turn/tumble and perfect-bound signatures, automatic cell rotation, colour bars and registration marks.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "sheet": { "type": "string" },
+                "sheet_width_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "sheet_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "landscape": { "type": "boolean" },
+                "fill": { "type": "string", "enum": ["repeat", "sequential"] },
+                "cols": { "type": "integer", "minimum": 1 },
+                "rows": { "type": "integer", "minimum": 1 },
+                "margin_mm": { "type": "number", "minimum": 0 },
+                "gutter_mm": { "type": "number", "minimum": 0 },
+                "gutter_x_mm": { "type": "number", "minimum": 0 },
+                "gutter_y_mm": { "type": "number", "minimum": 0 },
+                "cell_width_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "cell_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "bleed_mm": { "type": "number", "minimum": 0 },
+                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge"] },
+                "marks": { "type": "boolean" },
+                "mark_length_mm": { "type": "number", "exclusiveMinimum": 0 },
+                "mark_offset_mm": { "type": "number", "minimum": 0 },
+                "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
+            }),
+            &["doc", "path"],
+        )),
         t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

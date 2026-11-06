@@ -71,6 +71,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("measure", Class::Layer(4)),
     ("search", Class::Layer(4)),
     ("print", Class::Layer(4)),
+    ("impose", Class::Layer(4)),
     ("media", Class::Layer(4)),
     ("ai", Class::Layer(4)),
     // L5 interaction
@@ -107,6 +108,7 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    ("impose", "print"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

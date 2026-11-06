@@ -118,6 +118,7 @@ pub use pdfcraft_annot::{
 };
 pub use pdfcraft_annot::{MAX_MODEL_BYTES as MAX_3D_MODEL_BYTES, ModelFormat as Model3dFormat};
 pub use pdfcraft_forms::detect;
+pub use pdfcraft_impose as impose;
 pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
