@@ -6,6 +6,8 @@
 //!
 //! - **Step & repeat** ([`Fill::Repeat`]): each source page is repeated across a grid of cells
 //!   (business cards, labels, flyers cut from a larger sheet).
+//! - **Cut & stack / unique collate** ([`Fill::CutStack`]): stacks that read in order once the
+//!   sheets are cut, optionally repeated across the sheet.
 //! - **Gang / n-up** ([`Fill::Sequential`]): consecutive source pages fill the grid in reading
 //!   order, with gutters between cells.
 //! - **Duplex** ([`Duplex`]): the back side of every sheet is laid out as the mirror image of the
@@ -63,6 +65,16 @@ pub enum Fill {
     Repeat,
     /// Consecutive pages fill the cells in reading order (n-up, ganging).
     Sequential,
+    /// Cut & stack ("unique collate"): the grid is cut into stacks and each stack runs on in page
+    /// order from one sheet to the next, so after cutting, every stack is already in sequence.
+    /// The first `cols / copies` columns hold different stacks and that block is repeated
+    /// `copies` times across the sheet. With 16 pages on 4 x 2 cells and 2 copies, sheet 1 reads
+    /// 1 5 1 5 / 9 13 9 13, sheet 2 reads 2 6 2 6 / 10 14 10 14, and so on.
+    CutStack {
+        /// How many times the block of different stacks is repeated across a row (at least 1;
+        /// must divide the number of columns).
+        copies: usize,
+    },
 }
 
 /// How the printed sheet is turned over to print its back.
@@ -333,6 +345,7 @@ pub fn step_and_repeat(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sh
     match spec.fill {
         Fill::Repeat => repeat_sheets(sizes, spec),
         Fill::Sequential => sequential_sheets(sizes, spec),
+        Fill::CutStack { copies } => cut_stack_sheets(sizes, spec, copies),
     }
 }
 
@@ -386,6 +399,45 @@ fn sequential_sheets(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Shee
             }
         }
         start = start.saturating_add(per_set.max(1));
+    }
+    Ok(out)
+}
+
+fn cut_stack_sheets(sizes: &[(f64, f64)], spec: &StepRepeat, copies: usize) -> Result<Vec<Sheet>, ImposeError> {
+    let widest = sizes.iter().fold(0.0_f64, |m, s| m.max(s.0));
+    let tallest = sizes.iter().fold(0.0_f64, |m, s| m.max(s.1));
+    let cells = grid(spec, spec.cell.unwrap_or((widest, tallest)))?;
+    // The grid is row by row from the top: the first row is the cells sharing the first top edge.
+    let top = cells.first().map_or(0.0, |c| c[3]);
+    let cols = cells.iter().take_while(|c| (c[3] - top).abs() < EPS).count().max(1);
+    if copies == 0 || !cols.is_multiple_of(copies) {
+        return Err(ImposeError::Invalid("copies", "at least 1 and dividing the number of columns"));
+    }
+    let block = cols / copies;
+    // Different stacks on one sheet.
+    let stacks = (cells.len() / cols) * block;
+    // Duplex cuts and stacks leaves (front/back page pairs) instead of single pages.
+    let per_unit = if spec.duplex.is_some() { 2 } else { 1 };
+    let units = sizes.len().div_ceil(per_unit);
+    let sheets = units.div_ceil(stacks.max(1));
+    check_sheet_count(sheets.saturating_mul(per_unit))?;
+    let slot = |index: usize| -> Slot { sizes.get(index).map(|s| (index, *s)) };
+    // The unit in cell `k` of sheet `s`: stack u holds units u * sheets .. u * sheets + sheets.
+    let unit = |k: usize, s: usize| -> usize {
+        let (r, c) = (k / cols, k % cols);
+        (r * block + c % block) * sheets + s
+    };
+    let mut out = Vec::new();
+    for s in 0..sheets {
+        let front: Vec<Slot> = (0..cells.len()).map(|k| slot(unit(k, s) * per_unit)).collect();
+        out.push(build_sheet(spec, &cells, &front));
+        if let Some(duplex) = spec.duplex {
+            let back: Vec<Slot> = (0..cells.len()).map(|k| slot(unit(k, s) * per_unit + 1)).collect();
+            if back.iter().any(Option::is_some) {
+                let back_cells: Vec<Rect> = cells.iter().map(|c| mirrored(*c, spec.sheet, duplex)).collect();
+                out.push(build_sheet(spec, &back_cells, &back));
+            }
+        }
     }
     Ok(out)
 }

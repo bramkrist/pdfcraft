@@ -5241,6 +5241,24 @@ fn making_a_booklet_through_tools() {
 }
 
 #[test]
+fn cut_and_stack_through_tools() {
+    let dir = workdir("cutstack");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["pages"].as_u64().unwrap();
+    let r = ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "SRA3", "fill": "cut-stack", "copies": 1, "cols": 1, "rows": 1, "margin_mm": 0, "path": "cs.pdf" }),
+    );
+    // One cell per sheet: one stack, so one sheet per page.
+    assert_eq!(r["sheets"].as_u64(), Some(n));
+    let bad = json!({ "doc": doc, "sheet": "SRA3", "fill": "cut-stack", "copies": 0, "path": "x.pdf" });
+    assert!(matches!(a.call("doc_impose", &bad), Err(ToolError::InvalidArgs(_))));
+    assert!(!dir.join("x.pdf").exists());
+}
+
+#[test]
 fn adding_bleed_through_tools() {
     let dir = workdir("bleed");
     let mut a = auto(&dir);

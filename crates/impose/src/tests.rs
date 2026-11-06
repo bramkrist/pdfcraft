@@ -262,3 +262,95 @@ fn a_runaway_grid_is_refused() {
     let err = step_and_repeat(&[(1.0, 1.0)], &s).expect_err("10^12 cells");
     assert_eq!(err, ImposeError::TooLarge("more cells on one sheet than are supported"));
 }
+
+/// The page numbers (1-based) of a sheet, row by row, as the attachment from the shop floor shows them.
+fn grid_of(sheet: &Sheet, cols: usize) -> Vec<Vec<usize>> {
+    let mut placed: Vec<&Placement> = sheet.placed.iter().collect();
+    placed.sort_by(|a, b| origin(b).1.total_cmp(&origin(a).1).then(origin(a).0.total_cmp(&origin(b).0)));
+    placed.chunks(cols).map(|row| row.iter().map(|p| p.page + 1).collect()).collect()
+}
+
+#[test]
+fn unique_collate_matches_the_shop_floor_example() {
+    // 16 pages, 4 x 2 cells, the block of 2 different stacks repeated twice across each row.
+    let mut s = StepRepeat::new((400.0, 200.0));
+    s.margins = Margins::default();
+    s.fill = Fill::CutStack { copies: 2 };
+    s.cols = Some(4);
+    s.rows = Some(2);
+    let sheets = step_and_repeat(&[(100.0, 100.0); 16], &s).expect("layout");
+    assert_eq!(sheets.len(), 4);
+    assert_eq!(grid_of(&sheets[0], 4), vec![vec![1, 5, 1, 5], vec![9, 13, 9, 13]]);
+    assert_eq!(grid_of(&sheets[1], 4), vec![vec![2, 6, 2, 6], vec![10, 14, 10, 14]]);
+    assert_eq!(grid_of(&sheets[2], 4), vec![vec![3, 7, 3, 7], vec![11, 15, 11, 15]]);
+    assert_eq!(grid_of(&sheets[3], 4), vec![vec![4, 8, 4, 8], vec![12, 16, 12, 16]]);
+}
+
+#[test]
+fn every_cut_stack_reads_in_page_order_through_the_sheets() {
+    for (n, copies) in [(16, 1), (13, 1), (20, 2), (7, 4)] {
+        let mut s = StepRepeat::new((400.0, 200.0));
+        s.margins = Margins::default();
+        s.fill = Fill::CutStack { copies };
+        s.cols = Some(4);
+        s.rows = Some(2);
+        let sheets = step_and_repeat(&vec![(100.0, 100.0); n], &s).expect("layout");
+        // Each cell position, read down the stack of sheets, is an unbroken run of pages, and the
+        // stacks of the first block, read one after another, are pages 1..=n exactly once.
+        let mut all = Vec::new();
+        for k in (0..8).filter(|k| k % 4 < 4 / copies) {
+            let stack: Vec<usize> = sheets.iter().filter_map(|sh| cells_in_order(sh).get(k).copied().flatten()).collect();
+            for w in stack.windows(2) {
+                assert_eq!(w[1], w[0] + 1, "{n} pages, {copies} copies, cell {k}: {stack:?}");
+            }
+            all.extend(stack);
+        }
+        all.sort_unstable();
+        assert_eq!(all, (0..n).collect::<Vec<_>>(), "{n} pages, {copies} copies");
+    }
+}
+
+/// The page in each of the 8 cells of a 4 x 2 grid (0-based, reading order), `None` if empty.
+fn cells_in_order(sheet: &Sheet) -> Vec<Option<usize>> {
+    let xs = [0.0, 100.0, 200.0, 300.0];
+    let ys = [100.0, 0.0];
+    let mut out = Vec::new();
+    for y in ys {
+        for x in xs {
+            out.push(sheet.placed.iter().find(|p| close(origin(p).0, x) && close(origin(p).1, y)).map(|p| p.page));
+        }
+    }
+    out
+}
+
+#[test]
+fn cut_stack_copies_must_divide_the_columns() {
+    for copies in [0, 3] {
+        let mut s = StepRepeat::new((400.0, 200.0));
+        s.margins = Margins::default();
+        s.fill = Fill::CutStack { copies };
+        s.cols = Some(4);
+        s.rows = Some(2);
+        assert!(matches!(step_and_repeat(&[(100.0, 100.0); 8], &s), Err(ImposeError::Invalid("copies", _))), "{copies}");
+    }
+}
+
+#[test]
+fn duplex_cut_stack_keeps_each_back_behind_its_front() {
+    let mut s = StepRepeat::new((400.0, 200.0));
+    s.margins = Margins::default();
+    s.fill = Fill::CutStack { copies: 1 };
+    s.cols = Some(4);
+    s.rows = Some(2);
+    s.duplex = Some(Duplex::LongEdge);
+    let sheets = step_and_repeat(&[(100.0, 100.0); 32], &s).expect("layout");
+    assert_eq!(sheets.len(), 4);
+    for pair in sheets.chunks(2) {
+        for f in &pair[0].placed {
+            let (fx, fy) = origin(f);
+            let b =
+                pair[1].placed.iter().find(|b| close(origin(b).0, 400.0 - fx - 100.0) && close(origin(b).1, fy)).expect("a back behind every front");
+            assert_eq!(b.page, f.page + 1);
+        }
+    }
+}

@@ -81,6 +81,7 @@ impl Automation {
         spec.fill = match a.opt_str("fill")?.unwrap_or("repeat") {
             "repeat" => Fill::Repeat,
             "sequential" => Fill::Sequential,
+            "cut-stack" => Fill::CutStack { copies: count(a, "copies")?.unwrap_or(1) },
             f => return Err(bad(format!("unknown fill {f:?}"))),
         };
         spec.cols = count(a, "cols")?;
