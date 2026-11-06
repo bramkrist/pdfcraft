@@ -34,7 +34,9 @@ export function pressSheets(job, layout, pagesCount, qty) {
   if (!layout || !layout.sheet_count) return 0;
   if (job.mode === 'repeat') {
     const up = Math.max(1, layout.up_per_sheet);
-    return Math.ceil(q / up) * Math.max(1, pagesCount);
+    // Duplex: odd/even pages back to back on one sheet (the engine puts 2 pages on 2 sides).
+    const pages = Math.max(1, pagesCount);
+    return Math.ceil(q / up) * (job.duplex ? Math.ceil(pages / 2) : pages);
   }
   const twoSided = job.mode === 'booklet' || !!job.duplex;
   const perCopy = twoSided ? Math.ceil(layout.sheet_count / 2) : layout.sheet_count;
