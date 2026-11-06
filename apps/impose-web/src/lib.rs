@@ -215,6 +215,7 @@ fn marks(job: &Job) -> Result<Option<Marks>, String> {
                 style: match m.style.as_deref().unwrap_or("corner") {
                     "corner" => MarkStyle::Corner,
                     "japanese" => MarkStyle::Japanese,
+                    "centred" | "centered" => MarkStyle::Centred,
                     x => return Err(bad(format!("unknown mark style {x:?}"))),
                 },
                 width: m.width_pt.unwrap_or(d.width),

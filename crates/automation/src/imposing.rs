@@ -84,6 +84,7 @@ fn marks_arg(a: &Args) -> Result<Option<Marks>> {
         style: match a.opt_str("mark_style")?.unwrap_or("corner") {
             "corner" => MarkStyle::Corner,
             "japanese" => MarkStyle::Japanese,
+            "centred" | "centered" => MarkStyle::Centred,
             m => return Err(bad(format!("unknown mark_style {m:?}"))),
         },
         width: a.opt_num("mark_width_pt")?.unwrap_or(default.width),

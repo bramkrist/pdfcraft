@@ -138,6 +138,11 @@ pub enum MarkStyle {
     /// Japanese style (tombo): a second line along the bleed edge beside every corner line, so
     /// the press room sees both the trim and the bleed.
     Japanese,
+    /// A cross centred on every outer trim corner, `length` long, half on the artwork and half
+    /// outside (offset is ignored). Where pages meet at the edge of the layout only the line
+    /// along the cut between them is drawn, and none inside the layout: a line is kept only when
+    /// its outer end lies clear of every other page.
+    Centred,
 }
 
 impl Default for Marks {
@@ -375,6 +380,9 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 /// one that would is left out. A mark with a negative offset runs into its own page by design. A
 /// mark two neighbours share is drawn once.
 fn trim_marks(trims: &[Rect], sheet: (f64, f64), bleed: f64, marks: Marks) -> Vec<[f64; 4]> {
+    if marks.style == MarkStyle::Centred {
+        return centred_marks(trims, sheet, marks.length);
+    }
     let gap = marks.offset;
     let len = marks.length;
     let mut lines: Vec<[f64; 4]> = Vec::new();
@@ -407,6 +415,38 @@ fn trim_marks(trims: &[Rect], sheet: (f64, f64), bleed: f64, marks: Marks) -> Ve
             for (x, out) in [(x0, -d), (x1, d)] {
                 push(own, [x + out, y0 - gap - len, x + out, y0 - gap]);
                 push(own, [x + out, y1 + gap, x + out, y1 + gap + len]);
+            }
+        }
+    }
+    lines
+}
+
+/// [`MarkStyle::Centred`] marks: per corner a horizontal and a vertical line through the corner,
+/// `len` long, from `len / 2` inside the page to `len / 2` outside it.
+fn centred_marks(trims: &[Rect], sheet: (f64, f64), len: f64) -> Vec<[f64; 4]> {
+    let h = len / 2.0;
+    let mut lines: Vec<[f64; 4]> = Vec::new();
+    // On or inside page `k` (its edges count).
+    let on_page = |k: usize, x: f64, y: f64| trims.get(k).is_some_and(|t| x >= t[0] - EPS && x <= t[2] + EPS && y >= t[1] - EPS && y <= t[3] + EPS);
+    for (own, t) in trims.iter().enumerate() {
+        let [x0, y0, x1, y1] = *t;
+        for (x, sx) in [(x0, -1.0), (x1, 1.0)] {
+            for (y, sy) in [(y0, -1.0), (y1, 1.0)] {
+                // (inner end, outer end) of the horizontal and the vertical line.
+                for (inner, outer) in [((x - sx * h, y), (x + sx * h, y)), ((x, y - sy * h), (x, y + sy * h))] {
+                    let line = [inner.0.min(outer.0), inner.1.min(outer.1), inner.0.max(outer.0), inner.1.max(outer.1)];
+                    let inside = line[0] >= -EPS && line[1] >= -EPS && line[2] <= sheet.0 + EPS && line[3] <= sheet.1 + EPS;
+                    let clear = (0..trims.len()).all(|k| k == own || !on_page(k, outer.0, outer.1));
+                    // A line through another page's inside (not just along its edge) would print on it.
+                    let crosses = trims
+                        .iter()
+                        .enumerate()
+                        .any(|(k, p)| k != own && line[0] < p[2] - EPS && p[0] < line[2] - EPS && line[1] < p[3] - EPS && p[1] < line[3] - EPS);
+                    let seen = lines.iter().any(|l| l.iter().zip(line.iter()).all(|(a, b)| (a - b).abs() < EPS));
+                    if inside && clear && !crosses && !seen {
+                        lines.push(line);
+                    }
+                }
             }
         }
     }

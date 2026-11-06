@@ -488,3 +488,30 @@ fn rotation_is_off_by_default_and_ignored_for_a_fixed_grid() {
     assert_eq!(sheets[0].placed.len(), 2);
     assert!(sheets[0].placed.iter().all(|p| p.matrix.0[1] == 0.0));
 }
+
+#[test]
+fn centred_marks_cross_the_outer_corners_and_mark_the_cuts_between_pages() {
+    // 2 x 2 pages of 100 x 60 with no gutter on a 300 x 200 sheet, 7-unit centred marks: the
+    // layout of the PAULUS sample.
+    let mut s = StepRepeat::new((300.0, 200.0));
+    s.cols = Some(2);
+    s.rows = Some(2);
+    s.marks = Some(Marks { style: MarkStyle::Centred, length: 7.0, ..Marks::default() });
+    let sheets = step_and_repeat(&[(100.0, 60.0)], &s).expect("layout");
+    let lines = &sheets[0].lines;
+    // Pages cover x 50..250, y 40..160; the cuts are x = 50, 150, 250 and y = 40, 100, 160.
+    let has = |l: [f64; 4]| lines.iter().any(|m| m.iter().zip(l.iter()).all(|(a, b)| (a - b).abs() < 1e-6));
+    // Outer corner: a full cross through (50, 40).
+    assert!(has([46.5, 40.0, 53.5, 40.0]) && has([50.0, 36.5, 50.0, 43.5]), "{lines:?}");
+    // Top middle: only the vertical line along the cut x = 150; the horizontal one would run
+    // onto the neighbour's edge.
+    assert!(has([150.0, 156.5, 150.0, 163.5]));
+    assert!(!has([146.5, 160.0, 153.5, 160.0]) && !has([150.0, 160.0, 153.5, 160.0]));
+    // Left middle: only the horizontal line along the cut y = 100.
+    assert!(has([46.5, 100.0, 53.5, 100.0]));
+    assert!(!has([50.0, 96.5, 50.0, 103.5]));
+    // Nothing in the middle of the layout.
+    assert!(lines.iter().all(|l| !(l[0] > 60.0 && l[2] < 240.0 && l[1] > 50.0 && l[3] < 150.0)), "{lines:?}");
+    // 4 outer corners x 2 + 2 cut lines on each of 4 sides / 2 = 8 + 4.
+    assert_eq!(lines.len(), 12, "{lines:?}");
+}

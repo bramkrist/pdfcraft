@@ -218,3 +218,14 @@ fn page_editor_mistakes_are_errors() {
     assert!(assemble(marked_pdf(2), vec![], &plan(r#"[{"blank_mm":[0,10]}]"#)).is_err());
     assert!(assemble(b"nope".to_vec(), vec![], &plan(r#"[{"src":0,"page":0}]"#)).is_err());
 }
+
+#[test]
+fn centred_marks_are_a_job_option() {
+    let l = layout(
+        &[[100.0, 60.0]],
+        &job(r#"{"mode":"repeat","sheet_mm":[300,200],"margin_mm":0,"cols":2,"rows":2,"marks":{"style":"centred","length_mm":7}}"#),
+    )
+    .expect("layout");
+    assert_eq!(l.sheets[0].marks_mm.len(), 12);
+    assert!(layout(&[[100.0, 60.0]], &job(r#"{"mode":"repeat","sheet_mm":[300,200],"marks":{"style":"cross"}}"#)).is_err());
+}

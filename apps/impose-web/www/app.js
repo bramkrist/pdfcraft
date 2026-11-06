@@ -138,12 +138,12 @@ function markFields() {
     <h2 class="sub2">Crop mark</h2>
     <div class="field">
       ${chk('marks', 'Pakai crop mark', true)}
-      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)']], 'corner')}
+      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)'], ['centred', 'Silang di sudut (seperti PAULUS)']], 'corner')}
       ${sel('mcolour', 'Warna', [['registration', 'Registration (semua plat)'], ['black', 'Hitam (plat K)']], 'registration')}
       ${num('mlen', 'Panjang (mm)', 5, 'min="0.1"')}
       ${num('moff', 'Jarak dari potong (mm)', 3)}
       ${num('mwidth', 'Tebal (pt)', 0.5, 'min="0.05"')}
-      <p class="hint full">Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.</p>
+      <p class="hint full" id="markhint">Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.</p>
     </div>`;
 }
 
@@ -214,11 +214,32 @@ function renderOptions() {
   const fb = fileBleed(activeDoc());
   const bleedInput = document.querySelector('[data-k="bleed"]');
   if (fb !== null && bleedInput) bleedInput.value = fb;
+  syncMarkFields();
   $('opts').querySelectorAll('[data-k]').forEach((el) => el.addEventListener('input', () => {
+    if (el.dataset.k === 'mstyle') {
+      const len = document.querySelector('[data-k="mlen"]');
+      // A centred cross is usually 7 mm across; the other styles 5.
+      if (len && el.value === 'centred' && Number(len.value) === 5) len.value = 7;
+      if (len && el.value !== 'centred' && Number(len.value) === 7) len.value = 5;
+      syncMarkFields();
+    }
     if (state.mode === 'manual' && !['mpage', 'snap'].includes(el.dataset.k)) manualSheetFromFields();
     recompute();
   }));
   recompute();
+}
+
+/** The distance field means nothing for centred crosses. */
+function syncMarkFields() {
+  const st = document.querySelector('[data-k="mstyle"]');
+  const off = document.querySelector('[data-k="moff"]');
+  const hint = document.getElementById('markhint');
+  if (!st || !off) return;
+  const centred = st.value === 'centred';
+  off.disabled = centred;
+  if (hint) hint.textContent = centred
+    ? 'Silang di tiap sudut luar, separuh di gambar separuh di luar. Di antara halaman cuma garis di jalur potong, tidak ada tanda di tengah layout.'
+    : 'Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.';
 }
 
 function val(k) {
