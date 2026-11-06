@@ -173,6 +173,8 @@ function renderOptions() {
       ${sheetFields('auto', true)}
       ${sel('align', 'Posisi', [['centre', 'Tengah'], ['spine', 'Rapat ke punggung']], 'centre')}
       ${num('edge', 'Tepi kosong (mm)', 0, 'min="0"')}
+      ${num('creep', 'Creep per lembar (mm)', 0, 'min="0" step="0.05"')}
+      <p class="hint full">Creep: halaman lembar dalam digeser ke punggung supaya hasil potong rata. Isi tebal kertas, mis. 0,1 mm (HVS 80) atau 0,25 mm (art carton 260). 0 = tanpa creep.</p>
       ${chk('scale', 'Skala menyesuaikan kertas', true)}
       ${chk('rtl', 'Jilid di kanan', false)}
     </div>`;
@@ -201,6 +203,23 @@ function renderOptions() {
     </div>
     <div class="msel" id="msel" hidden></div>
     <div class="mstat" id="mstat"></div>
+    <div class="tpl">
+      <div class="l">Template layout</div>
+      <div class="mbar">
+        <select id="tpl-list" aria-label="Template tersimpan" style="flex:1;min-width:0">${tplOptions()}</select>
+        <button type="button" class="btn ghost small" data-m="tpl-use">Pakai</button>
+        <button type="button" class="btn ghost small" data-m="tpl-del">Hapus</button>
+      </div>
+      <div class="mbar" style="margin-top:6px">
+        <input type="text" id="tpl-name" placeholder="Nama template baru" maxlength="60" style="flex:1;min-width:0">
+        <button type="button" class="btn ghost small" data-m="tpl-save">Simpan</button>
+      </div>
+      <div class="mbar" style="margin-top:6px">
+        <button type="button" class="btn ghost small" data-m="tpl-export">Ekspor .json</button>
+        <label class="btn ghost small" style="cursor:pointer">Impor .json<input type="file" id="tpl-import" accept="application/json,.json" hidden></label>
+      </div>
+      <p class="hint">Tersimpan di browser ini. Ekspor/impor untuk dipakai di komputer lain.</p>
+    </div>
     <p class="hint">Tarik halaman di layout garis. <kbd>←↑→↓</kbd> geser 0,5 mm (<kbd>Shift</kbd> 5 mm) · <kbd>R</kbd> putar · <kbd>D</kbd> duplikat · <kbd>Del</kbd> hapus.</p>
     ${markFields()}`;
   } else if (state.mode === 'bleed') {
@@ -293,6 +312,8 @@ function job() {
     }
     j.align = val('align');
     j.edge_mm = numOr('edge', 0);
+    const creep = numOr('creep', 0);
+    if (creep > 0 && j.binding !== 'continuous') j.creep_mm = creep;
     j.scale = val('scale');
     j.right_to_left = val('rtl');
     return j;
@@ -853,7 +874,112 @@ function manualChanged() {
   draw();
 }
 
+// ---- manual templates (per browser; export/import as JSON to share) ----
+const TPL_KEY = 'impose.manualTemplates.v1';
+
+function tplAll() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TPL_KEY) || '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function tplWrite(all) {
+  try {
+    localStorage.setItem(TPL_KEY, JSON.stringify(all));
+    return true;
+  } catch (e) {
+    say('Template tidak bisa disimpan di browser ini (penyimpanan diblokir). Pakai Ekspor .json.', true);
+    return false;
+  }
+}
+
+function tplOptions() {
+  const names = Object.keys(tplAll()).sort((a, b) => a.localeCompare(b));
+  return names.length ? names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('') : '<option value="">(belum ada)</option>';
+}
+
+/** The current manual layout as a template: sheet, bleed, marks and every sheet side. */
+function tplFromCurrent(d) {
+  const m = manualOf(d);
+  return { v: 1, sheet_mm: m.sheet_mm.slice(), bleed_mm: numOr('bleed', 0), marks: marksJob() || null, sheets: m.sheets.map((side) => side.map((c) => ({ ...c }))) };
+}
+
+function tplApply(d, t) {
+  if (!t || !Array.isArray(t.sheets) || !Array.isArray(t.sheet_mm)) return say('Template tidak valid.', true);
+  let skipped = 0;
+  const sheets = t.sheets.map((side) => (Array.isArray(side) ? side : []).filter((c) => {
+    const ok = c && Number.isInteger(c.page) && c.page >= 0 && c.page < d.sizes.length && Number.isFinite(c.x) && Number.isFinite(c.y) && [0, 90, 180, 270].includes(c.turn);
+    if (!ok) skipped++;
+    return ok;
+  }).map((c) => ({ page: c.page, x: c.x, y: c.y, turn: c.turn })));
+  d.manual = { sheet_mm: t.sheet_mm.slice(0, 2).map(Number), sheets: sheets.length ? sheets : [[]] };
+  state.sheet = 0;
+  state.sel = null;
+  renderOptions();
+  const set = (k, v) => { const el = document.querySelector(`[data-k="${k}"]`); if (el && v !== undefined && v !== null) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } };
+  set('bleed', t.bleed_mm);
+  set('marks', !!t.marks);
+  if (t.marks) {
+    set('mlen', t.marks.length_mm);
+    set('moff', t.marks.offset_mm);
+    set('mstyle', t.marks.style);
+    set('mwidth', t.marks.width_pt);
+    set('mcolour', t.marks.registration ? 'registration' : 'black');
+    syncMarkFields();
+  }
+  manualChanged();
+  // A template made for different page sizes still loads; the problems panel shows overlaps.
+  say(`Template dipakai.${skipped ? ` ${skipped} halaman dilewati (nomor halaman tidak ada di file ini).` : ''}`, !!skipped, !skipped);
+}
+
+function tplAction(what) {
+  const d = activeDoc();
+  if (!d) return;
+  const all = tplAll();
+  const chosen = $('tpl-list') ? $('tpl-list').value : '';
+  if (what === 'tpl-save') {
+    const name = ($('tpl-name').value || '').trim();
+    if (!name) return say('Isi nama template dulu.', true);
+    if (all[name] && !confirm(`Template "${name}" sudah ada. Timpa?`)) return;
+    all[name] = tplFromCurrent(d);
+    if (tplWrite(all)) { renderOptions(); say(`Template "${name}" disimpan.`, false, true); }
+  } else if (what === 'tpl-use') {
+    if (!chosen || !all[chosen]) return say('Pilih template dulu.', true);
+    tplApply(d, all[chosen]);
+  } else if (what === 'tpl-del') {
+    if (!chosen || !all[chosen] || !confirm(`Hapus template "${chosen}"?`)) return;
+    delete all[chosen];
+    if (tplWrite(all)) { renderOptions(); say(`Template "${chosen}" dihapus.`, false, true); }
+  } else if (what === 'tpl-export') {
+    const name = chosen && all[chosen] ? chosen : 'layout-manual';
+    const data = chosen && all[chosen] ? all[chosen] : tplFromCurrent(d);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ name, ...data }, null, 2)], { type: 'application/json' }));
+    a.download = `${name.replace(/[^\w.-]+/g, '_')}.impose.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+}
+
+async function tplImport(file) {
+  if (!file) return;
+  try {
+    const t = JSON.parse(await file.text());
+    if (!t || !Array.isArray(t.sheets) || !Array.isArray(t.sheet_mm)) throw new Error('bukan template impose');
+    const name = String(t.name || file.name.replace(/\.impose\.json$|\.json$/i, '')).slice(0, 60);
+    const all = tplAll();
+    all[name] = { v: 1, sheet_mm: t.sheet_mm, bleed_mm: t.bleed_mm, marks: t.marks || null, sheets: t.sheets };
+    if (tplWrite(all)) { renderOptions(); const l = $('tpl-list'); if (l) l.value = name; say(`Template "${name}" diimpor. Klik Pakai.`, false, true); }
+  } catch (e) {
+    say('Impor gagal: ' + String(e.message || e), true);
+  }
+}
+
 function manualAction(what) {
+  if (what.startsWith('tpl-')) return tplAction(what);
   const d = activeDoc();
   if (!d) return;
   const m = manualOf(d);
@@ -1657,6 +1783,7 @@ $('opts').addEventListener('click', (e) => {
   if (b) manualAction(b.dataset.m);
 });
 $('opts').addEventListener('input', (e) => { if (e.target.id === 'm-left' || e.target.id === 'm-top') manualSelInput(e); });
+$('opts').addEventListener('change', (e) => { if (e.target.id === 'tpl-import') { tplImport(e.target.files[0]); e.target.value = ''; } });
 $('cv').addEventListener('pointerdown', manualPointerDown);
 $('cv').addEventListener('pointermove', manualPointerMove);
 $('cv').addEventListener('pointerup', manualPointerUp);

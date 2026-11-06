@@ -169,3 +169,6 @@ summary { cursor: pointer; font-weight: 600; }
 .pgimg.blank { background: #fff repeating-linear-gradient(45deg, transparent 0 8px, #F3F2EE 8px 9px); }
 .pg figcaption { font-size: 12px; text-align: center; margin-top: var(--sp-1); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pg figcaption b { color: var(--ink); }
+
+.tpl { border-top: 1px solid var(--line); margin-top: var(--sp-3); padding-top: var(--sp-3); }
+.tpl .l { margin-bottom: var(--sp-1); }
