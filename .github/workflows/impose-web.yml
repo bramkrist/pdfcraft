@@ -49,6 +49,7 @@ jobs:
       - name: Bind for the browser
         run: |
           wasm-bindgen --target web --out-dir out target/wasm32-unknown-unknown/release/pdfcraft_impose_web.wasm
+          cp apps/impose-web/www/* out/
           echo "{\"commit\":\"${GITHUB_SHA}\",\"built\":\"$(date -u +%FT%TZ)\"}" > out/build.json
           ls -la out
       - name: Publish to impose-web-dist
