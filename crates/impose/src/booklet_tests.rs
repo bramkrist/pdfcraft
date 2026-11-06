@@ -191,3 +191,44 @@ fn bad_numbers_are_errors_never_panics() {
     s.edge = 50.0; // nothing left inside the edge
     assert!(booklet(&pages(4), &s).is_err());
 }
+
+#[test]
+fn creep_moves_inner_sheets_towards_the_spine_and_clips_at_it() {
+    // 8 pages of 100 x 150 on a 200 x 150 sheet: two sheets of paper, sides 0-1 outer, 2-3 inner.
+    let mut spec = Booklet::new();
+    spec.sheet = Some((200.0, 150.0));
+    spec.scale = false;
+    spec.creep = 2.0;
+    let sheets = booklet(&[(100.0, 150.0); 8], &spec).expect("booklet");
+    assert_eq!(sheets.len(), 4);
+    let at = |s: usize, i: usize| {
+        let p = &sheets[s].placed[i];
+        (p.page, p.matrix.0[4], p.clip)
+    };
+    // Outer sheet: unmoved, unclipped.
+    assert_eq!(at(0, 0), (7, 0.0, [0.0, 0.0, 100.0, 150.0]));
+    assert_eq!(at(0, 1), (0, 100.0, [0.0, 0.0, 100.0, 150.0]));
+    // Inner sheet: 2 towards the spine; the 2 that would pass it are clipped.
+    assert_eq!(at(2, 0), (5, 2.0, [0.0, 0.0, 98.0, 150.0]));
+    assert_eq!(at(2, 1), (2, 98.0, [2.0, 0.0, 100.0, 150.0]));
+    assert_eq!(at(3, 0).1, 2.0);
+    // Perfect binding counts per signature: the first sheet of the second signature is outer again.
+    spec.binding = Binding::Perfect { signature: 4, last: LastSignature::Full };
+    let perfect = booklet(&[(100.0, 150.0); 8], &spec).expect("perfect");
+    assert!(perfect.iter().all(|s| s.placed.iter().all(|p| p.matrix.0[4] == 0.0 || p.matrix.0[4] == 100.0)), "one sheet per signature: no creep");
+    // Continuous booklets are not folded.
+    spec.binding = Binding::Continuous;
+    let flat = booklet(&[(100.0, 150.0); 8], &spec).expect("continuous");
+    assert!(flat.iter().all(|s| s.placed.iter().all(|p| p.clip == [0.0, 0.0, 100.0, 150.0])));
+}
+
+#[test]
+fn creep_that_would_eat_half_a_page_is_refused() {
+    let mut spec = Booklet::new();
+    spec.sheet = Some((200.0, 150.0));
+    spec.scale = false;
+    spec.creep = 60.0;
+    assert!(booklet(&[(100.0, 150.0); 8], &spec).is_err());
+    spec.creep = -1.0;
+    assert!(booklet(&[(100.0, 150.0); 8], &spec).is_err());
+}

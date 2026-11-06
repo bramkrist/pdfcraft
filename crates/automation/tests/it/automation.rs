@@ -5225,8 +5225,10 @@ fn making_a_booklet_through_tools() {
     assert_eq!(r["sides"].as_u64(), Some(n.div_ceil(4) * 2));
     let r = ok(&mut a, "doc_booklet", json!({ "doc": doc, "binding": "continuous", "scale": false, "sheet": "A3", "path": "cont.pdf" }));
     assert_eq!(r["sides"].as_u64(), Some(n.div_ceil(2)));
+    ok(&mut a, "doc_booklet", json!({ "doc": doc, "creep_mm": 0.2, "path": "creep.pdf" }));
     for bad in [
         json!({ "doc": doc }),
+        json!({ "doc": doc, "creep_mm": -0.1, "path": "x.pdf" }),
         json!({ "doc": doc, "binding": "perfect", "path": "x.pdf" }),
         json!({ "doc": doc, "binding": "perfect", "signature": 6, "path": "x.pdf" }),
         json!({ "doc": doc, "binding": "stapled", "path": "x.pdf" }),

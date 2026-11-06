@@ -70,6 +70,8 @@ pub struct Job {
     pub align: Option<String>,
     pub edge_mm: Option<f64>,
     pub right_to_left: Option<bool>,
+    /// Booklet: creep per sheet of paper of a folded signature, mm (see `Booklet::creep`).
+    pub creep_mm: Option<f64>,
     /// Bleed to generate: one amount, or `[left, bottom, right, top]`.
     pub add_bleed_mm: Option<MarginMm>,
     /// Generated bleed: `mirror` (default) or `scale`.
@@ -272,6 +274,7 @@ fn booklet(job: &Job) -> Result<Booklet, String> {
     };
     b.edge = pt(job.edge_mm.unwrap_or(0.0));
     b.right_to_left = job.right_to_left.unwrap_or(false);
+    b.creep = pt(job.creep_mm.unwrap_or(0.0));
     Ok(b)
 }
 

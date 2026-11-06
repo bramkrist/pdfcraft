@@ -61,12 +61,17 @@ pub struct Booklet {
     pub edge: f64,
     /// Bound on the right (right-to-left scripts): left and right pages swap places.
     pub right_to_left: bool,
+    /// Creep (shingling) per sheet of paper in a folded signature: the pages of the k-th sheet
+    /// from the outside move `k * creep` towards the spine, so the inner sheets, pushed out by
+    /// the outer ones, trim to the same margins. The part of a page that moves across the spine
+    /// is cut off there. 0 for none; continuous booklets are not folded and ignore it.
+    pub creep: f64,
 }
 
 impl Booklet {
     #[must_use]
     pub fn new() -> Self {
-        Booklet { sheet: None, binding: Binding::Saddle, scale: true, align: Align::Centre, edge: 0.0, right_to_left: false }
+        Booklet { sheet: None, binding: Binding::Saddle, scale: true, align: Align::Centre, edge: 0.0, right_to_left: false, creep: 0.0 }
     }
 }
 
@@ -76,16 +81,17 @@ impl Default for Booklet {
     }
 }
 
-/// One sheet side: the pages on its left and right halves (`None` is a blank).
-type Side = (Option<usize>, Option<usize>);
+/// One sheet side: the pages on its left and right halves (`None` is a blank), and which sheet
+/// of paper of its folded signature it is, counted from the outside (0 for unfolded sheets).
+type Side = (Option<usize>, Option<usize>, usize);
 
 /// The sides of one saddle-stitched signature of `padded` pages (a multiple of four), whose
 /// pages are `base + 0 ..` of which only the first `real` exist.
 fn saddle_sides(base: usize, real: usize, padded: usize, out: &mut Vec<Side>) {
     let page = |i: usize| if i < real { Some(base + i) } else { None };
     for k in 0..padded / 4 {
-        out.push((page(padded - 1 - 2 * k), page(2 * k)));
-        out.push((page(2 * k + 1), page(padded - 2 - 2 * k)));
+        out.push((page(padded - 1 - 2 * k), page(2 * k), k));
+        out.push((page(2 * k + 1), page(padded - 2 - 2 * k), k));
     }
 }
 
@@ -99,7 +105,7 @@ fn sides(pages: usize, binding: Binding) -> Result<Vec<Side>, ImposeError> {
         Binding::Continuous => {
             for j in 0..pages.div_ceil(2) {
                 let page = |i: usize| if i < pages { Some(i) } else { None };
-                out.push((page(2 * j), page(2 * j + 1)));
+                out.push((page(2 * j), page(2 * j + 1), 0));
             }
         }
         Binding::Saddle => saddle_sides(0, pages, ceil4(pages), &mut out),
@@ -126,6 +132,7 @@ pub fn booklet(sizes: &[(f64, f64)], spec: &Booklet) -> Result<Vec<Sheet>, Impos
         return Err(ImposeError::NoPages);
     }
     non_negative(spec.edge, "space at the edge of the sheet")?;
+    non_negative(spec.creep, "creep")?;
     let (mut max_w, mut max_h) = (0.0_f64, 0.0_f64);
     for &(w, h) in sizes {
         positive(w, "page width")?;
@@ -155,8 +162,13 @@ pub fn booklet(sizes: &[(f64, f64)], spec: &Booklet) -> Result<Vec<Sheet>, Impos
     }
     let all = sides(sizes.len(), spec.binding)?;
     check_sheet_count(all.len())?;
+    // The innermost sheet moves furthest; it must still keep most of its page.
+    let deepest = all.iter().map(|s| s.2).max().unwrap_or(0) as f64;
+    if spec.creep * deepest >= max_w * scale / 2.0 {
+        return Err(ImposeError::Invalid("creep", "less than half a page at the innermost sheet"));
+    }
 
-    let place = |page: usize, right_half: bool| -> Placement {
+    let place = |page: usize, right_half: bool, depth: usize| -> Placement {
         // `sizes` was indexed by the same page numbers `sides` produced, all below `sizes.len()`;
         // `get` keeps that an invariant of the data rather than of a panic.
         let (w, h) = sizes.get(page).copied().unwrap_or((max_w, max_h));
@@ -168,15 +180,29 @@ pub fn booklet(sizes: &[(f64, f64)], spec: &Booklet) -> Result<Vec<Sheet>, Impos
             (Align::Spine, true) => half_x,
         };
         let oy = spec.edge + (area_h - sh) / 2.0;
-        Placement { page, matrix: Matrix([scale, 0.0, 0.0, scale, ox, oy]), clip: [0.0, 0.0, w, h] }
+        // Creep: towards the spine (the left page right, the right page left), and what passes
+        // the spine is clipped at it.
+        let shift = spec.creep * depth as f64;
+        let spine = spec.edge + half_w;
+        let (ox, clip) = if right_half {
+            let ox = ox - shift;
+            let over = ((spine - ox) / scale).clamp(0.0, w);
+            (ox, [over, 0.0, w, h])
+        } else {
+            let ox = ox + shift;
+            let over = ((ox + sw - spine) / scale).clamp(0.0, w);
+            (ox, [0.0, 0.0, w - over, h])
+        };
+        Placement { page, matrix: Matrix([scale, 0.0, 0.0, scale, ox, oy]), clip }
     };
     Ok(all
         .into_iter()
-        .map(|(left, right)| {
+        .map(|(left, right, depth)| {
+            let depth = if spec.binding == Binding::Continuous { 0 } else { depth };
             let (left, right) = if spec.right_to_left { (right, left) } else { (left, right) };
             let mut placed = Vec::with_capacity(2);
-            placed.extend(left.map(|p| place(p, false)));
-            placed.extend(right.map(|p| place(p, true)));
+            placed.extend(left.map(|p| place(p, false, depth)));
+            placed.extend(right.map(|p| place(p, true, depth)));
             Sheet { size: sheet, placed, ..Sheet::default() }
         })
         .collect())

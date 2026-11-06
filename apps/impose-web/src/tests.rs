@@ -229,3 +229,12 @@ fn centred_marks_are_a_job_option() {
     assert_eq!(l.sheets[0].marks_mm.len(), 12);
     assert!(layout(&[[100.0, 60.0]], &job(r#"{"mode":"repeat","sheet_mm":[300,200],"marks":{"style":"cross"}}"#)).is_err());
 }
+
+#[test]
+fn booklet_creep_shifts_the_inner_sheet() {
+    let l = layout(&[[100.0, 150.0]; 8], &job(r#"{"mode":"booklet","sheet_mm":[200,150],"scale":false,"creep_mm":2}"#)).expect("layout");
+    // Side 3 (inner sheet front): its left page starts 2 mm right of the edge.
+    let x = l.sheets[2].cells[0].rect_mm[0];
+    assert!((x - 2.0).abs() < 1e-6, "{x}");
+    assert!((l.sheets[0].cells[0].rect_mm[0]).abs() < 1e-6);
+}

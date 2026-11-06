@@ -201,6 +201,7 @@ impl Automation {
         };
         spec.edge = mm(a, "edge_mm")?.unwrap_or(0.0);
         spec.right_to_left = a.opt_bool("right_to_left")?.unwrap_or(false);
+        spec.creep = mm(a, "creep_mm")?.unwrap_or(0.0);
         let content = content_arg(a)?;
         let sides = impose::booklet(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
         let bytes = self.session.booklet_pdf(id, &spec, content).map_err(failed)?;
