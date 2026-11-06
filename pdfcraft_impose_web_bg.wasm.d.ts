@@ -5,6 +5,7 @@ export const impose: (a: number, b: number, c: number, d: number) => [number, nu
 export const layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const pageSizes: (a: number, b: number) => [number, number, number, number];
+export const preflight: (a: number, b: number) => [number, number, number, number];
 export const version: () => [number, number];
 export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;

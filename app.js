@@ -53,6 +53,10 @@ root.innerHTML = `
       <label class="drop" id="drop"><strong>Buka PDF</strong><span>Pilih atau tarik ke sini. Diproses di komputer ini, tidak di-upload.</span><input id="file" type="file" accept="application/pdf,.pdf"></label>
       <div class="fileinfo" id="fileinfo"></div>
     </section>
+    <section class="panel" id="pfpanel" hidden>
+      <h2>Cek file (preflight)</h2>
+      <div id="pf"></div>
+    </section>
     <section class="panel">
       <h2>Layout berikutnya</h2>
       <div class="seg" id="modes">${MODES.map(([k, t]) => `<button type="button" data-mode="${k}" aria-pressed="${k === state.mode}">${t}</button>`).join('')}</div>
@@ -72,6 +76,7 @@ root.innerHTML = `
     <div class="canvaswrap"><canvas id="cv" width="900" height="600"></canvas></div>
     <div class="nav"><button type="button" id="prev" aria-label="Sebelumnya">‹</button><span id="pos"></span><button type="button" id="next" aria-label="Berikutnya">›</button></div>
     <div class="actions">
+      <label class="check ack" id="ackwrap" hidden><input type="checkbox" id="ack"> File ada masalah merah. Saya sudah cek dan tetap lanjut.</label>
       <button type="button" class="btn" id="apply" disabled>Terapkan ke tab baru</button>
       <button type="button" class="btn ghost" id="download" disabled>Download tab ini</button>
       <button type="button" class="btn ghost" id="saveas" disabled hidden>Simpan ke folder…</button>
@@ -98,7 +103,7 @@ function sheetFields(defaultSheet = 'A3+ 32×48', withAuto = false) {
   return `
     ${sel('sheet', 'Kertas', [...(withAuto ? [['auto', 'Otomatis (2× halaman)']] : []), ...Object.keys(SHEETS).map((k) => [k, k]), ['custom', 'Custom']], defaultSheet, 'full')}
     <div class="full row2" id="customsheet" hidden>${num('sheet_w', 'Lebar (mm)', 320)}${num('sheet_h', 'Tinggi (mm)', 480)}</div>
-    ${withAuto ? '' : sel('orient', 'Arah', [['landscape', 'Landscape'], ['portrait', 'Portrait']], 'landscape')}
+    ${withAuto ? '' : sel('orient', 'Arah', [['best', 'Terbaik (paling banyak up)'], ['landscape', 'Landscape'], ['portrait', 'Portrait']], 'best')}
     ${withAuto ? '' : num('margin', 'Margin (mm)', 5, 'min="0"')}`;
 }
 
@@ -124,7 +129,8 @@ function gridFields(withCopies) {
     ${num('gy', 'Jarak baris (mm)', 0, 'min="0"')}
     ${num('bleed', 'Bleed di file (mm)', 0, 'min="0"')}
     ${sel('duplex', 'Sisi cetak', [['', '1 sisi'], ['long-edge', '2 sisi · balik sisi panjang'], ['short-edge', '2 sisi · balik sisi pendek']], '')}
-    ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}`;
+    ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}
+    ${state.mode === 'repeat' ? chk('rotate', 'Putar sebagian baris kalau muat lebih banyak', true) : ''}`;
 }
 
 function renderOptions() {
@@ -151,6 +157,9 @@ function renderOptions() {
     </div><p class="hint">Tepi halaman sekarang dianggap garis potong. Hasilnya punya TrimBox dan BleedBox.</p>`;
   }
   $('opts').innerHTML = body;
+  const fb = fileBleed(activeDoc());
+  const bleedInput = document.querySelector('[data-k="bleed"]');
+  if (fb !== null && bleedInput) bleedInput.value = fb;
   $('opts').querySelectorAll('[data-k]').forEach((el) => el.addEventListener('input', recompute));
   recompute();
 }
@@ -175,7 +184,7 @@ function sheetMm() {
   if (cs) cs.hidden = !custom;
   if (s === 'auto' || s === undefined) return null;
   let [w, h] = custom ? [numOr('sheet_w', 320), numOr('sheet_h', 480)] : SHEETS[s];
-  const wantLandscape = (val('orient') ?? 'landscape') === 'landscape';
+  const wantLandscape = (val('orient') ?? 'landscape') !== 'portrait';
   if (wantLandscape !== w > h) [w, h] = [h, w];
   return [w, h];
 }
@@ -202,6 +211,8 @@ function job() {
     return j;
   }
   j.sheet_mm = sheet;
+  if (val('orient') === 'best') j.sheet_orientation = 'best';
+  if (state.mode === 'repeat' && val('rotate')) j.rotate = true;
   j.margin_mm = numOr('margin', 5);
   const cols = numOr('cols', null), rows = numOr('rows', null);
   if (cols) j.cols = cols;
@@ -269,7 +280,13 @@ function addDoc(name, bytes, tags = []) {
     say(String(e.message || e), true);
     return null;
   }
-  const d = { id: ++state.seq, name, bytes, sizes, tags };
+  let pf = null;
+  try {
+    pf = JSON.parse(state.engine.preflight(bytes.slice()));
+  } catch (e) {
+    console.warn('preflight', e);
+  }
+  const d = { id: ++state.seq, name, bytes, sizes, tags, pf };
   state.docs.push(d);
   state.active = d.id;
   renderTabs();
@@ -285,8 +302,47 @@ function renderTabs() {
     </div>`).join('');
 }
 
+const STATUS_TEXT = { pass: 'OK', info: 'Info', na: '–', warn: 'Perhatian', fail: 'Masalah' };
+
+function renderPreflight(d) {
+  const panel = $('pfpanel');
+  if (!d || !d.pf) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const pf = d.pf;
+  const r = pf.report;
+  const ink = (on, name, cls) => `<span class="ink ${cls} ${on ? 'on' : 'off'}" title="${name}${on ? ' dipakai' : ' tidak dipakai'}">${name[0]}</span>`;
+  const spots = r.inks.spots.map((s) => `<li><span class="ink spot on"></span>${esc(s.name)} <span class="hint">hal. ${s.pages.join(', ')}</span></li>`).join('');
+  const rows = pf.checks.map((c) => `<li class="pf-${c.status}"><span class="dot"></span><div><b>${esc(c.title)}</b> <span class="st">${STATUS_TEXT[c.status] || c.status}</span><br><span class="pfmsg">${esc(c.message)}</span></div></li>`).join('');
+  const fonts = r.fonts.map((f) => `<li>${f.embedded ? '' : '<b class="bad">TIDAK TERTANAM</b> '}${esc(f.name)} <span class="hint">${esc(f.subtype)}${f.subset ? ' · subset' : ''}</span></li>`).join('');
+  const imgs = r.images.slice(0, 50).map((i) => `<li class="${i.missing || i.ppi < 200 ? 'bad' : i.ppi < 300 ? 'meh' : ''}">hal. ${i.page} · ${i.missing ? esc(i.missing) : `${Math.round(i.ppi)} DPI · ${i.width_px}×${i.height_px} px · ${fmt(i.size_mm[0], 0)}×${fmt(i.size_mm[1], 0)} mm · ${esc(i.colour)}`}</li>`).join('');
+  $('pf').innerHTML = `
+    <div class="pfhead pf-${pf.overall}"><span class="dot"></span>${pf.overall === 'pass' ? 'Siap cetak' : pf.overall === 'warn' ? 'Ada yang perlu dicek' : 'Ada masalah'}</div>
+    <div class="inks">${ink(r.inks.cyan, 'Cyan', 'c')}${ink(r.inks.magenta, 'Magenta', 'm')}${ink(r.inks.yellow, 'Yellow', 'y')}${ink(r.inks.black, 'Black', 'k')}
+      ${r.inks.rgb ? '<span class="tagchip warn">RGB</span>' : ''}${r.inks.registration ? '<span class="tagchip warn">Registration</span>' : ''}${r.inks.lab ? '<span class="tagchip warn">Lab</span>' : ''}</div>
+    ${spots ? `<ul class="plain spots">${spots}</ul>` : ''}
+    <ul class="pflist">${rows}</ul>
+    ${fonts ? `<details><summary>Font (${r.fonts.length})</summary><ul class="plain">${fonts}</ul></details>` : ''}
+    ${imgs ? `<details><summary>Gambar (${r.images.length})</summary><ul class="plain">${imgs}</ul></details>` : ''}`;
+}
+
+/** The bleed every page of the file already has, when the file says so on every side. */
+function fileBleed(d) {
+  const b = d && d.pf ? d.pf.report.pages.map((p) => p.bleed_mm) : [];
+  if (!b.length || b.some((x) => !x)) return null;
+  const min = Math.min(...b.flat());
+  return min > 0.05 ? Math.round(min * 10) / 10 : null;
+}
+
 function showDocInfo() {
   const d = activeDoc();
+  renderPreflight(d);
+  $('ack').checked = false;
+  const fb = fileBleed(d);
+  const bleedInput = document.querySelector('[data-k="bleed"]');
+  if (fb !== null && bleedInput) bleedInput.value = fb;
   if (!d) {
     $('fileinfo').innerHTML = '';
     return;
@@ -337,7 +393,9 @@ function draw() {
   const d = activeDoc();
   const L = state.layout;
   $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
-  $('apply').disabled = !L || state.busy;
+  const blocked = !!(d && d.pf && d.pf.overall === 'fail');
+  $('ackwrap').hidden = !blocked;
+  $('apply').disabled = !L || state.busy || (blocked && !$('ack').checked);
   $('download').disabled = !d || state.busy;
   $('saveas').hidden = !('showSaveFilePicker' in window);
   $('saveas').disabled = !d || state.busy;
@@ -574,6 +632,7 @@ $('tabs').addEventListener('click', (e) => {
 $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.sheet - 1); draw(); });
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
 $('apply').addEventListener('click', apply);
+$('ack').addEventListener('change', draw);
 $('download').addEventListener('click', () => save(false));
 $('saveas').addEventListener('click', () => save(true));
 

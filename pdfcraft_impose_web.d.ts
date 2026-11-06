@@ -22,6 +22,11 @@ export function layoutPdf(pdf: Uint8Array, job_json: string): string;
 export function pageSizes(pdf: Uint8Array): string;
 
 /**
+ * `preflight(pdfBytes)`: `{ overall, checks: [{id, title, status, message}], report }` as JSON.
+ */
+export function preflight(pdf: Uint8Array): string;
+
+/**
  * The engine version, to show in the UI and record with a job.
  */
 export function version(): string;
@@ -34,6 +39,7 @@ export interface InitOutput {
     readonly layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly pageSizes: (a: number, b: number) => [number, number, number, number];
+    readonly preflight: (a: number, b: number) => [number, number, number, number];
     readonly version: () => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
