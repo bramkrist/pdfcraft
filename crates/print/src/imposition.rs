@@ -321,7 +321,13 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
             ));
         }
         if !sheet.borders.is_empty() || !sheet.lines.is_empty() {
-            c.push_str("q 0 G 0.5 w\n");
+            let paint = sheet.marks_paint;
+            let width = if paint.width.is_finite() && paint.width > 0.0 { paint.width } else { 0.5 };
+            if paint.registration {
+                c.push_str(&format!("q /CSReg CS 1 SCN {} w\n", n(width)));
+            } else {
+                c.push_str(&format!("q 0 G {} w\n", n(width)));
+            }
             for r in &sheet.borders {
                 c.push_str(&format!("{} {} {} {} re S\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1])));
             }
@@ -333,6 +339,11 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
         let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), c.as_bytes())));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xo));
+        if sheet.marks_paint.registration && (!sheet.borders.is_empty() || !sheet.lines.is_empty()) {
+            let mut cs = Dict::new();
+            cs.set(b"CSReg".to_vec(), registration_colour_space(&mut doc));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+        }
         let mut p = Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages_root));
@@ -377,4 +388,17 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
 /// Which source pages land on each sheet (for previews and the sheet count).
 pub fn sheet_pages(sheets: &[Sheet]) -> Vec<Vec<usize>> {
     sheets.iter().map(|s| s.placed.iter().map(|p| p.page).collect()).collect()
+}
+
+/// `[/Separation /All /DeviceCMYK <tint>]`: one ink that marks every plate (ISO 32000-2 8.6.6.4).
+/// The tint transform maps 0..1 to CMYK 0..1 on all four so a composite view shows it as black.
+fn registration_colour_space(doc: &mut Document) -> Object {
+    let mut f = Dict::new();
+    f.set(b"FunctionType".to_vec(), Object::Int(2));
+    f.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    f.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    f.set(b"C1".to_vec(), Object::Array(vec![Object::Int(1); 4]));
+    f.set(b"N".to_vec(), Object::Int(1));
+    let tint = doc.add(Object::Dict(f));
+    Object::Array(vec![Object::name("Separation"), Object::name("All"), Object::name("DeviceCMYK"), Object::Ref(tint)])
 }

@@ -1,7 +1,9 @@
 //! `doc_impose` (step & repeat, gang n-up) and `doc_booklet` (saddle, perfect-bound and continuous
 //! booklets) onto press sheets, and `doc_bleed` (generated bleed).
 
-use pdfcraft_engine::impose::{self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, Marks, StepRepeat};
+use pdfcraft_engine::impose::{
+    self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat,
+};
 use pdfcraft_engine::print::Content;
 use serde_json::{Value, json};
 
@@ -104,6 +106,13 @@ impl Automation {
             spec.marks = Some(Marks {
                 length: mm(a, "mark_length_mm")?.unwrap_or(default.length),
                 offset: mm(a, "mark_offset_mm")?.unwrap_or(default.offset),
+                style: match a.opt_str("mark_style")?.unwrap_or("corner") {
+                    "corner" => MarkStyle::Corner,
+                    "japanese" => MarkStyle::Japanese,
+                    m => return Err(bad(format!("unknown mark_style {m:?}"))),
+                },
+                width: a.opt_num("mark_width_pt")?.unwrap_or(default.width),
+                registration: a.opt_bool("mark_registration")?.unwrap_or(false),
             });
         }
         let content = content_arg(a)?;

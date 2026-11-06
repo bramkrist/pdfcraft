@@ -13,7 +13,8 @@
 //! - **Duplex** ([`Duplex`]): the back side of every sheet is laid out as the mirror image of the
 //!   front, so a front cell and its back cell sit exactly behind each other once the sheet is
 //!   turned over the long or the short edge.
-//! - **Trim marks**: corner marks around every trimmed page, placed outside the bleed.
+//! - **Trim marks**: corner or Japanese (tombo) marks around every finished page, optionally running
+//!   into the page (negative offset), in black or registration colour.
 //! - **Bleed** ([`add_bleed`]): mirrored or scaled margin around every page, with a `TrimBox`.
 //! - **Booklets** ([`booklet()`]): saddle-stitched, perfect-bound (signatures) and continuous page
 //!   order, two pages to a sheet side.
@@ -107,15 +108,32 @@ impl Margins {
 pub struct Marks {
     /// Length of each mark line.
     pub length: f64,
-    /// Gap between the trim edge and the start of a mark. A mark never starts inside the bleed:
-    /// the gap is at least [`StepRepeat::bleed`].
+    /// Distance from the trim edge to where a mark starts, outward. Negative runs the mark into
+    /// the page by that much: offset -3 mm with length 5 mm puts 3 mm inside the trim and 2 mm
+    /// outside it.
     pub offset: f64,
+    pub style: MarkStyle,
+    /// Line width.
+    pub width: f64,
+    /// Registration colour (every plate) instead of black.
+    pub registration: bool,
+}
+
+/// How the corner of a page is marked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MarkStyle {
+    /// One line along each trim edge at every corner.
+    #[default]
+    Corner,
+    /// Japanese style (tombo): a second line along the bleed edge beside every corner line, so
+    /// the press room sees both the trim and the bleed.
+    Japanese,
 }
 
 impl Default for Marks {
     fn default() -> Self {
         // 3 mm marks starting 3 mm from the trim, the usual press-room values.
-        Self { length: 8.504, offset: 8.504 }
+        Self { length: 8.504, offset: 8.504, style: MarkStyle::Corner, width: 0.5, registration: false }
     }
 }
 
@@ -189,7 +207,10 @@ fn validate(spec: &StepRepeat, sizes: &[(f64, f64)]) -> Result<(), ImposeError> 
     }
     if let Some(m) = spec.marks {
         positive(m.length, "mark length")?;
-        non_negative(m.offset, "mark offset")?;
+        positive(m.width, "mark width")?;
+        if !m.offset.is_finite() || m.offset + m.length <= 0.0 {
+            return Err(ImposeError::Invalid("mark offset", "finite, and leaving part of the mark outside the trim"));
+        }
     }
     for &(w, h) in sizes {
         positive(w, "page width")?;
@@ -280,18 +301,17 @@ type Slot = Option<(usize, (f64, f64))>;
 fn build_sheet(spec: &StepRepeat, cells: &[Rect], slots: &[Slot]) -> Sheet {
     let mut sheet = Sheet { size: spec.sheet, ..Sheet::default() };
     let mut trims: Vec<Rect> = Vec::new();
-    let mut visible: Vec<Rect> = Vec::new();
     for (cell, slot) in cells.iter().zip(slots) {
         let Some((page, size)) = *slot else { continue };
-        let Some((placement, vis)) = place_page(page, size, *cell) else { continue };
+        let Some((placement, _)) = place_page(page, size, *cell) else { continue };
         sheet.placed.push(placement);
-        visible.push(vis);
         let ox = placement.matrix.0[4];
         let oy = placement.matrix.0[5];
         trims.push([ox + spec.bleed, oy + spec.bleed, ox + size.0 - spec.bleed, oy + size.1 - spec.bleed]);
     }
     if let Some(marks) = spec.marks {
-        sheet.lines = trim_marks(&trims, &visible, spec.sheet, spec.bleed, marks);
+        sheet.lines = trim_marks(&trims, spec.sheet, spec.bleed, marks);
+        sheet.marks_paint = pdfcraft_print::MarkPaint { width: marks.width, registration: marks.registration };
     }
     sheet
 }
@@ -300,13 +320,15 @@ fn overlaps(a: Rect, b: Rect) -> bool {
     a[0] < b[2] - EPS && b[0] < a[2] - EPS && a[1] < b[3] - EPS && b[1] < a[3] - EPS
 }
 
-/// Corner marks around every rect in `trims`. A mark that would run over a page or off the sheet
-/// is left out, and a mark that two neighbours share is drawn once.
-fn trim_marks(trims: &[Rect], pages: &[Rect], sheet: (f64, f64), bleed: f64, marks: Marks) -> Vec<[f64; 4]> {
-    let gap = marks.offset.max(bleed);
+/// Corner marks around every rect in `trims` (the finished pages). As in press-room smart marks,
+/// a mark may run over a bleed but never over another page's finished area, nor off the sheet;
+/// one that would is left out. A mark with a negative offset runs into its own page by design. A
+/// mark two neighbours share is drawn once.
+fn trim_marks(trims: &[Rect], sheet: (f64, f64), bleed: f64, marks: Marks) -> Vec<[f64; 4]> {
+    let gap = marks.offset;
     let len = marks.length;
     let mut lines: Vec<[f64; 4]> = Vec::new();
-    let mut push = |line: [f64; 4]| {
+    let mut push = |own: usize, line: [f64; 4]| {
         let norm = [line[0].min(line[2]), line[1].min(line[3]), line[0].max(line[2]), line[1].max(line[3])];
         let inside = norm[0] >= -EPS && norm[1] >= -EPS && norm[2] <= sheet.0 + EPS && norm[3] <= sheet.1 + EPS;
         // A mark is a line; thicken it across its direction (not along it, so a mark that only
@@ -316,21 +338,26 @@ fn trim_marks(trims: &[Rect], pages: &[Rect], sheet: (f64, f64), bleed: f64, mar
         } else {
             [norm[0] - 0.01, norm[1], norm[2] + 0.01, norm[3]]
         };
-        let over_page = pages.iter().any(|p| overlaps(probe, *p));
+        let over_page = trims.iter().enumerate().any(|(k, p)| k != own && overlaps(probe, *p));
         let seen = lines.iter().any(|l| l.iter().zip(norm.iter()).all(|(a, b)| (a - b).abs() < EPS));
         if inside && !over_page && !seen {
             lines.push(norm);
         }
     };
-    for t in trims {
+    // Japanese marks repeat each line along the bleed edge, `bleed` further out.
+    let shifts: &[f64] = if marks.style == MarkStyle::Japanese && bleed > EPS { &[0.0, 1.0] } else { &[0.0] };
+    for (own, t) in trims.iter().enumerate() {
         let [x0, y0, x1, y1] = *t;
-        for y in [y0, y1] {
-            push([x0 - gap - len, y, x0 - gap, y]);
-            push([x1 + gap, y, x1 + gap + len, y]);
-        }
-        for x in [x0, x1] {
-            push([x, y0 - gap - len, x, y0 - gap]);
-            push([x, y1 + gap, x, y1 + gap + len]);
+        for &k in shifts {
+            let d = k * bleed;
+            for (y, out) in [(y0, -d), (y1, d)] {
+                push(own, [x0 - gap - len, y + out, x0 - gap, y + out]);
+                push(own, [x1 + gap, y + out, x1 + gap + len, y + out]);
+            }
+            for (x, out) in [(x0, -d), (x1, d)] {
+                push(own, [x + out, y0 - gap - len, x + out, y0 - gap]);
+                push(own, [x + out, y1 + gap, x + out, y1 + gap + len]);
+            }
         }
     }
     lines
@@ -406,10 +433,21 @@ fn sequential_sheets(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Shee
 fn cut_stack_sheets(sizes: &[(f64, f64)], spec: &StepRepeat, copies: usize) -> Result<Vec<Sheet>, ImposeError> {
     let widest = sizes.iter().fold(0.0_f64, |m, s| m.max(s.0));
     let tallest = sizes.iter().fold(0.0_f64, |m, s| m.max(s.1));
-    let cells = grid(spec, spec.cell.unwrap_or((widest, tallest)))?;
+    let cell = spec.cell.unwrap_or((widest, tallest));
+    let mut cells = grid(spec, cell)?;
     // The grid is row by row from the top: the first row is the cells sharing the first top edge.
-    let top = cells.first().map_or(0.0, |c| c[3]);
-    let cols = cells.iter().take_while(|c| (c[3] - top).abs() < EPS).count().max(1);
+    let row_len = |cells: &[Rect]| {
+        let top = cells.first().map_or(0.0, |c| c[3]);
+        cells.iter().take_while(|c| (c[3] - top).abs() < EPS).count().max(1)
+    };
+    let mut cols = row_len(&cells);
+    // Automatic columns: as many as fit, rounded down to a whole number of repeated blocks.
+    if spec.cols.is_none() && copies > 0 && !cols.is_multiple_of(copies) && cols >= copies {
+        let mut fixed = spec.clone();
+        fixed.cols = Some(cols - cols % copies);
+        cells = grid(&fixed, cell)?;
+        cols = row_len(&cells);
+    }
     if copies == 0 || !cols.is_multiple_of(copies) {
         return Err(ImposeError::Invalid("copies", "at least 1 and dividing the number of columns"));
     }

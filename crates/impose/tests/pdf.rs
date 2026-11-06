@@ -176,3 +176,21 @@ fn a_mirrored_bleed_continues_the_artwork_as_its_own_reflection_and_sets_the_tri
     assert_eq!(first_page_entry(&out, b"TrimBox"), Some(boxed([10, 10, 110, 70])));
     assert_eq!(first_page_entry(&out, b"BleedBox"), Some(boxed([0, 0, 120, 80])));
 }
+
+#[test]
+fn registration_marks_render_black_and_ink_every_plate() {
+    let src = pdf(&[(100, 100, "1 1 1 rg 0 0 100 100 re f")]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let mut spec = StepRepeat::new((200.0, 200.0));
+    spec.cols = Some(1);
+    spec.rows = Some(1);
+    spec.marks = Some(pdfcraft_impose::Marks { length: 20.0, offset: 5.0, width: 2.0, registration: true, ..Default::default() });
+    let out = impose_document(&doc, &spec, Content::Document).expect("impose");
+    // Page at 50..150: the bottom-left horizontal mark runs from x 25 to 45 on y 50.
+    let sheet = render(&out, 0);
+    assert_eq!(rgb(&sheet, 35, 150), [0, 0, 0], "mark in registration colour shows as black");
+    // The colour space is a Separation named All.
+    let page = first_page_entry(&out, b"Resources").expect("resources");
+    let name = |n: &str| format!("Name({:?})", n.as_bytes());
+    assert!(page.contains(&name("Separation")) && page.contains(&name("All")), "{page}");
+}

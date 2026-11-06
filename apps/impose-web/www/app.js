@@ -1,9 +1,13 @@
 // INDIE Impose — impose.pixelindie.com. Everything runs in this browser: the PDF never leaves
 // the computer. The engine is pdfcraft-impose compiled to WebAssembly (bramkrist/pdfcraft,
-// apps/impose-web); the preview and the PDF come from the same layout.
+// apps/impose-web); pages are drawn with pdf.js for the picture preview only.
+//
+// Work happens in tabs: the file you open is the first tab, and every layout you apply becomes a
+// new tab you can lay out again (n-up on A4, then step & repeat of that onto A3+), view, and save.
 
 const root = document.getElementById('app');
 const user = root.dataset.user || '';
+const A = (f) => '/a.php?f=' + encodeURIComponent(f);
 
 const SHEETS = {
   'A3+ 32×48': [320, 480],
@@ -19,47 +23,59 @@ const MODES = [
   ['booklet', 'Booklet'],
   ['bleed', 'Bleed'],
 ];
+const MODE_TAG = { repeat: 'STEPREPEAT', sequential: 'NUP', 'cut-stack': 'UNIQUECOLLATE', booklet: 'BOOKLET', bleed: 'BLEED' };
 
 const state = {
   engine: null,
-  file: null, // { name, bytes: Uint8Array }
-  sizes: null, // [[w, h], ...] mm
+  docs: [], // { id, name, bytes, sizes, tags: [] }
+  active: null,
   mode: 'repeat',
+  view: 'layout', // 'doc' | 'layout' | 'picture'
   layout: null,
   sheet: 0,
   busy: false,
+  seq: 0,
 };
 
 root.innerHTML = `
 <header class="top">
-  <div class="brand"><div class="disc" aria-hidden="true">P</div><div><div class="word">IMPOSE</div></div></div>
+  <div class="brand"><div class="disc" aria-hidden="true">P</div><div class="word">IMPOSE</div></div>
   <div class="tag">PIXELINDIE · Pre-press</div>
   <div class="spacer"></div>
   <div class="who"><span id="ver"></span> · ${esc(user)}<a href="/logout.php">Keluar</a></div>
 </header>
+<nav class="tabs" id="tabs" aria-label="Dokumen"></nav>
 <div class="layout">
   <aside>
     <div id="nobanner" class="banner" hidden></div>
     <section class="panel">
       <h2>File</h2>
-      <label class="drop" id="drop"><strong>Pilih atau tarik PDF ke sini</strong><span>Diproses di komputer ini, tidak di-upload.</span><input id="file" type="file" accept="application/pdf,.pdf"></label>
+      <label class="drop" id="drop"><strong>Buka PDF</strong><span>Pilih atau tarik ke sini. Diproses di komputer ini, tidak di-upload.</span><input id="file" type="file" accept="application/pdf,.pdf"></label>
       <div class="fileinfo" id="fileinfo"></div>
     </section>
     <section class="panel">
-      <h2>Mode</h2>
+      <h2>Layout berikutnya</h2>
       <div class="seg" id="modes">${MODES.map(([k, t]) => `<button type="button" data-mode="${k}" aria-pressed="${k === state.mode}">${t}</button>`).join('')}</div>
     </section>
     <section class="panel" id="opts"></section>
   </aside>
   <section class="stage">
-    <div class="summary" id="summary"></div>
+    <div class="msg" id="msg" role="status"></div>
+    <div class="stagehead">
+      <div class="summary" id="summary"></div>
+      <div class="viewseg" id="views">
+        <button type="button" data-view="doc">Isi tab</button>
+        <button type="button" data-view="layout">Layout garis</button>
+        <button type="button" data-view="picture">Layout gambar</button>
+      </div>
+    </div>
     <div class="canvaswrap"><canvas id="cv" width="900" height="600"></canvas></div>
-    <div class="nav"><button type="button" id="prev">‹</button><span id="pos"></span><button type="button" id="next">›</button></div>
+    <div class="nav"><button type="button" id="prev" aria-label="Sebelumnya">‹</button><span id="pos"></span><button type="button" id="next" aria-label="Berikutnya">›</button></div>
     <div class="actions">
-      <button type="button" class="btn" id="make" disabled>Buat PDF</button>
+      <button type="button" class="btn" id="apply" disabled>Terapkan ke tab baru</button>
+      <button type="button" class="btn ghost" id="download" disabled>Download tab ini</button>
       <button type="button" class="btn ghost" id="saveas" disabled hidden>Simpan ke folder…</button>
     </div>
-    <div class="msg" id="msg" role="status"></div>
   </section>
 </div>`;
 
@@ -71,18 +87,33 @@ function esc(s) {
 function fmt(n, d = 1) {
   return Number(n).toLocaleString('id-ID', { maximumFractionDigits: d });
 }
+const activeDoc = () => state.docs.find((d) => d.id === state.active) || null;
 
-// ---- options per mode -------------------------------------------------------------------
+// ---- options ------------------------------------------------------------------------------
 const num = (k, label, value, attrs = '') => `<div><label class="l" for="o-${k}">${label}</label><input type="number" id="o-${k}" data-k="${k}" value="${value}" step="any" ${attrs}></div>`;
 const sel = (k, label, opts, value, cls = '') => `<div class="${cls}"><label class="l" for="o-${k}">${label}</label><select id="o-${k}" data-k="${k}">${opts.map(([v, t]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`;
 const chk = (k, label, on) => `<label class="check full"><input type="checkbox" id="o-${k}" data-k="${k}" ${on ? 'checked' : ''}>${label}</label>`;
 
-function sheetFields() {
+function sheetFields(defaultSheet = 'A3+ 32×48', withAuto = false) {
   return `
-    ${sel('sheet', 'Kertas', [...Object.keys(SHEETS).map((k) => [k, k]), ['custom', 'Custom']], 'A3+ 32×48', 'full')}
+    ${sel('sheet', 'Kertas', [...(withAuto ? [['auto', 'Otomatis (2× halaman)']] : []), ...Object.keys(SHEETS).map((k) => [k, k]), ['custom', 'Custom']], defaultSheet, 'full')}
     <div class="full row2" id="customsheet" hidden>${num('sheet_w', 'Lebar (mm)', 320)}${num('sheet_h', 'Tinggi (mm)', 480)}</div>
-    ${sel('orient', 'Arah', [['landscape', 'Landscape'], ['portrait', 'Portrait']], 'landscape')}
-    ${num('margin', 'Margin (mm)', 5, 'min="0"')}`;
+    ${withAuto ? '' : sel('orient', 'Arah', [['landscape', 'Landscape'], ['portrait', 'Portrait']], 'landscape')}
+    ${withAuto ? '' : num('margin', 'Margin (mm)', 5, 'min="0"')}`;
+}
+
+function markFields() {
+  return `
+    <h2 class="sub2">Crop mark</h2>
+    <div class="field">
+      ${chk('marks', 'Pakai crop mark', true)}
+      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)']], 'corner')}
+      ${sel('mcolour', 'Warna', [['registration', 'Registration (semua plat)'], ['black', 'Hitam (plat K)']], 'registration')}
+      ${num('mlen', 'Panjang (mm)', 5, 'min="0.1"')}
+      ${num('moff', 'Jarak dari potong (mm)', 3)}
+      ${num('mwidth', 'Tebal (pt)', 0.5, 'min="0.05"')}
+      <p class="hint full">Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.</p>
+    </div>`;
 }
 
 function gridFields(withCopies) {
@@ -93,22 +124,21 @@ function gridFields(withCopies) {
     ${num('gy', 'Jarak baris (mm)', 0, 'min="0"')}
     ${num('bleed', 'Bleed di file (mm)', 0, 'min="0"')}
     ${sel('duplex', 'Sisi cetak', [['', '1 sisi'], ['long-edge', '2 sisi · balik sisi panjang'], ['short-edge', '2 sisi · balik sisi pendek']], '')}
-    ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}
-    ${chk('marks', 'Crop mark', true)}`;
+    ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}`;
 }
 
 function renderOptions() {
   let body = '';
   if (state.mode === 'repeat' || state.mode === 'sequential' || state.mode === 'cut-stack') {
     body = `<h2>Susunan</h2><div class="field">${sheetFields()}${gridFields(state.mode === 'cut-stack')}</div>
-      ${state.mode === 'cut-stack' ? '<p class="hint">Tiap posisi jadi satu tumpukan yang urut dari lembar ke lembar. "Ulang blok" harus membagi jumlah kolom.</p>' : ''}`;
+      ${state.mode === 'cut-stack' ? '<p class="hint">Tiap posisi jadi satu tumpukan yang urut dari lembar ke lembar. Kolom otomatis dibulatkan ke kelipatan "Ulang blok".</p>' : ''}
+      ${markFields()}`;
   } else if (state.mode === 'booklet') {
     body = `<h2>Booklet</h2><div class="field">
       ${sel('binding', 'Jilid', [['saddle', 'Steples tengah'], ['perfect', 'Lem panas (signature)'], ['continuous', 'Berurutan']], 'saddle', 'full')}
       ${num('signature', 'Halaman / signature', 16, 'min="4" step="4"')}
       ${sel('last', 'Signature terakhir', [['multiple-of-four', 'Kelipatan 4'], ['full', 'Penuh']], 'multiple-of-four')}
-      ${sel('sheet', 'Kertas', [['auto', 'Otomatis (2× halaman)'], ...Object.keys(SHEETS).map((k) => [k, k]), ['custom', 'Custom']], 'auto', 'full')}
-      <div class="full row2" id="customsheet" hidden>${num('sheet_w', 'Lebar (mm)', 480)}${num('sheet_h', 'Tinggi (mm)', 320)}</div>
+      ${sheetFields('auto', true)}
       ${sel('align', 'Posisi', [['centre', 'Tengah'], ['spine', 'Rapat ke punggung']], 'centre')}
       ${num('edge', 'Tepi kosong (mm)', 0, 'min="0"')}
       ${chk('scale', 'Skala menyesuaikan kertas', true)}
@@ -143,9 +173,9 @@ function sheetMm() {
   const custom = s === 'custom';
   const cs = document.getElementById('customsheet');
   if (cs) cs.hidden = !custom;
-  if (s === 'auto') return null;
+  if (s === 'auto' || s === undefined) return null;
   let [w, h] = custom ? [numOr('sheet_w', 320), numOr('sheet_h', 480)] : SHEETS[s];
-  const wantLandscape = (val('orient') ?? 'landscape') === 'landscape' || state.mode === 'booklet';
+  const wantLandscape = (val('orient') ?? 'landscape') === 'landscape';
   if (wantLandscape !== w > h) [w, h] = [h, w];
   return [w, h];
 }
@@ -158,8 +188,8 @@ function job() {
     return j;
   }
   const sheet = sheetMm();
-  if (sheet) j.sheet_mm = sheet;
   if (state.mode === 'booklet') {
+    if (sheet) j.sheet_mm = sheet[0] >= sheet[1] ? sheet : [sheet[1], sheet[0]];
     j.binding = val('binding');
     if (j.binding === 'perfect') {
       j.signature = numOr('signature', 16);
@@ -171,6 +201,7 @@ function job() {
     j.right_to_left = val('rtl');
     return j;
   }
+  j.sheet_mm = sheet;
   j.margin_mm = numOr('margin', 5);
   const cols = numOr('cols', null), rows = numOr('rows', null);
   if (cols) j.cols = cols;
@@ -178,82 +209,195 @@ function job() {
   j.gutter_mm = [numOr('gx', 0), numOr('gy', 0)];
   j.bleed_mm = numOr('bleed', 0);
   if (val('duplex')) j.duplex = val('duplex');
-  if (val('marks')) j.marks = true;
+  if (val('marks')) {
+    j.marks = {
+      length_mm: numOr('mlen', 5),
+      offset_mm: numOr('moff', 3),
+      style: val('mstyle'),
+      width_pt: numOr('mwidth', 0.5),
+      registration: val('mcolour') === 'registration',
+    };
+  }
   if (state.mode === 'cut-stack') j.copies = numOr('copies', 1);
   return j;
 }
 
-// ---- engine -----------------------------------------------------------------------------
+function jobLabel(j) {
+  const m = MODES.find(([k]) => k === j.mode)[1];
+  const sheetName = j.sheet_mm ? (Object.entries(SHEETS).find(([, v]) => (v[0] === j.sheet_mm[0] && v[1] === j.sheet_mm[1]) || (v[0] === j.sheet_mm[1] && v[1] === j.sheet_mm[0])) || [`${j.sheet_mm[0]}×${j.sheet_mm[1]}`])[0] : '';
+  return `${m}${sheetName ? ' ' + sheetName : ''}`;
+}
+
+// ---- engine and pdf.js --------------------------------------------------------------------
 async function loadEngine() {
   try {
-    const mod = await import('/a.php?f=pdfcraft_impose_web.js');
-    await mod.default({ module_or_path: '/a.php?f=pdfcraft_impose_web_bg.wasm' });
+    const mod = await import(A('pdfcraft_impose_web.js'));
+    await mod.default({ module_or_path: A('pdfcraft_impose_web_bg.wasm') });
     state.engine = mod;
     $('ver').textContent = 'engine ' + mod.version();
   } catch (e) {
     const b = $('nobanner');
     b.hidden = false;
-    b.textContent = 'Mesin impose belum terpasang di server ini. Halaman siap, tunggu build WebAssembly selesai.';
+    b.textContent = 'Mesin impose belum terpasang di server ini.';
     console.error(e);
   }
 }
 
-async function readFile(f) {
+let pdfjs = null;
+async function loadPdfjs() {
+  if (!pdfjs) {
+    pdfjs = await import(A('pdf.min.mjs'));
+    pdfjs.GlobalWorkerOptions.workerSrc = A('pdf.worker.min.mjs');
+  }
+  return pdfjs;
+}
+const pdfCache = new WeakMap();
+async function pdfDoc(bytes) {
+  if (!pdfCache.has(bytes)) {
+    const lib = await loadPdfjs();
+    pdfCache.set(bytes, lib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise);
+  }
+  return pdfCache.get(bytes);
+}
+
+// ---- documents (tabs) ---------------------------------------------------------------------
+function addDoc(name, bytes, tags = []) {
+  let sizes = null;
+  try {
+    sizes = JSON.parse(state.engine.pageSizes(bytes.slice()));
+  } catch (e) {
+    say(String(e.message || e), true);
+    return null;
+  }
+  const d = { id: ++state.seq, name, bytes, sizes, tags };
+  state.docs.push(d);
+  state.active = d.id;
+  renderTabs();
+  showDocInfo();
+  return d;
+}
+
+function renderTabs() {
+  $('tabs').innerHTML = state.docs.map((d) => `
+    <div class="tab ${d.id === state.active ? 'on' : ''}" data-id="${d.id}">
+      <button type="button" class="tabname" data-id="${d.id}" title="${esc(d.name)}">${esc(d.name)}</button>
+      <button type="button" class="tabx" data-close="${d.id}" aria-label="Tutup tab">×</button>
+    </div>`).join('');
+}
+
+function showDocInfo() {
+  const d = activeDoc();
+  if (!d) {
+    $('fileinfo').innerHTML = '';
+    return;
+  }
+  const s = d.sizes;
+  const mixed = s.some((p) => Math.abs(p[0] - s[0][0]) > 0.5 || Math.abs(p[1] - s[0][1]) > 0.5);
+  $('fileinfo').innerHTML = `<b>${esc(d.name)}</b><br>${fmt(d.bytes.length / 1048576, 2)} MB · ${s.length} halaman · hal. 1: ${fmt(s[0][0])} × ${fmt(s[0][1])} mm${mixed ? ' · ukuran halaman campur' : ''}`;
+}
+
+async function openFile(f) {
   if (!f) return;
+  if (!state.engine) return say('Mesin belum siap.', true);
   if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') return say('File harus PDF.', true);
   const bytes = new Uint8Array(await f.arrayBuffer());
-  state.file = { name: f.name, bytes };
-  state.sizes = null;
-  if (state.engine) {
-    try {
-      state.sizes = JSON.parse(state.engine.pageSizes(bytes.slice()));
-    } catch (e) {
-      return say(String(e.message || e), true);
-    }
+  if (addDoc(f.name.replace(/\.pdf$/i, ''), bytes)) {
+    state.view = 'layout';
+    recompute();
   }
-  const s = state.sizes;
-  $('fileinfo').innerHTML = `<b>${esc(f.name)}</b><br>${fmt(bytes.length / 1048576, 2)} MB${s ? ` · ${s.length} halaman · hal. 1: ${fmt(s[0][0])} × ${fmt(s[0][1])} mm` : ''}${s && s.some((p) => Math.abs(p[0] - s[0][0]) > 0.5 || Math.abs(p[1] - s[0][1]) > 0.5) ? ' · ukuran halaman campur' : ''}`;
-  recompute();
 }
+
+// ---- layout + preview ---------------------------------------------------------------------
+let previewTimer = null;
+let preview = null; // { key, bytes }
 
 function recompute() {
   say('');
   state.layout = null;
-  state.sheet = 0;
-  if (state.engine && state.sizes) {
+  const d = activeDoc();
+  if (state.engine && d) {
     try {
-      state.layout = JSON.parse(state.engine.layout(JSON.stringify(state.sizes), JSON.stringify(job())));
+      state.layout = JSON.parse(state.engine.layout(JSON.stringify(d.sizes), JSON.stringify(job())));
     } catch (e) {
       say(String(e.message || e), true);
     }
   }
+  if (state.layout) state.sheet = Math.min(state.sheet, state.layout.sheets.length - 1);
+  else state.sheet = 0;
   draw();
 }
 
+function pageCount() {
+  const d = activeDoc();
+  if (state.view === 'doc') return d ? d.sizes.length : 0;
+  return state.layout ? state.layout.sheets.length : 0;
+}
+
 function draw() {
+  const d = activeDoc();
   const L = state.layout;
-  const cv = $('cv');
-  const ctx = cv.getContext('2d');
-  $('make').disabled = !L || state.busy;
+  $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
+  $('apply').disabled = !L || state.busy;
+  $('download').disabled = !d || state.busy;
   $('saveas').hidden = !('showSaveFilePicker' in window);
-  $('saveas').disabled = !L || state.busy;
-  if (!L) {
-    $('summary').innerHTML = state.file ? '' : '<span class="hint">Pilih PDF untuk mulai.</span>';
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    $('pos').textContent = '';
-    $('prev').disabled = $('next').disabled = true;
+  $('saveas').disabled = !d || state.busy;
+  if (!d) {
+    $('summary').innerHTML = '<span class="hint">Buka PDF untuk mulai.</span>';
+    clearCanvas();
+    navText();
     return;
   }
-  const s = L.sheets[state.sheet];
-  const [W, H] = s.size_mm;
-  $('summary').innerHTML = `
-    <div class="big">${L.sheet_count}<small>${state.mode === 'bleed' ? 'halaman' : 'sisi lembar'}</small></div>
-    ${state.mode === 'bleed' ? '' : `<div class="big">${L.up_per_sheet}<small>up / lembar</small></div>`}
-    <div class="hint">${fmt(W)} × ${fmt(H)} mm</div>`;
-  const maxW = 1100, maxH = 760;
-  const k = Math.min(maxW / W, maxH / H);
+  if (state.view === 'doc') {
+    $('summary').innerHTML = `<div class="big">${d.sizes.length}<small>halaman di tab ini</small></div>`;
+  } else if (L) {
+    const s = L.sheets[state.sheet];
+    $('summary').innerHTML = `
+      <div class="big">${L.sheet_count}<small>${state.mode === 'bleed' ? 'halaman' : 'sisi lembar'}</small></div>
+      ${state.mode === 'bleed' ? '' : `<div class="big">${L.up_per_sheet}<small>up / lembar</small></div>`}
+      <div class="hint">${fmt(s.size_mm[0])} × ${fmt(s.size_mm[1])} mm</div>`;
+  } else {
+    $('summary').innerHTML = '';
+  }
+  navText();
+  if (state.view === 'layout') {
+    if (L) drawOutline(L.sheets[state.sheet]);
+    else clearCanvas();
+  } else {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(drawPicture, 120);
+  }
+}
+
+function navText() {
+  const n = pageCount();
+  const i = state.sheet;
+  $('prev').disabled = i <= 0;
+  $('next').disabled = i >= n - 1;
+  if (!n) return ($('pos').textContent = '');
+  if (state.view === 'doc') return ($('pos').textContent = `Halaman ${i + 1} dari ${n}`);
+  const j = job();
+  $('pos').textContent = `Lembar ${i + 1} dari ${n}${j.duplex || j.mode === 'booklet' ? (i % 2 ? ' · belakang' : ' · depan') : ''}`;
+}
+
+function clearCanvas() {
+  const cv = $('cv');
+  cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+}
+
+function fitCanvas(W, H) {
+  const cv = $('cv');
+  cv.style.width = '';
+  const k = Math.min(1100 / W, 760 / H);
   cv.width = Math.round(W * k);
   cv.height = Math.round(H * k);
+  return k;
+}
+
+function drawOutline(s) {
+  const [W, H] = s.size_mm;
+  const k = fitCanvas(W, H);
+  const cv = $('cv');
+  const ctx = cv.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, cv.width, cv.height);
   const X = (x) => x * k, Y = (y) => cv.height - y * k;
@@ -288,46 +432,95 @@ function draw() {
     ctx.lineTo(X(x1), Y(y1));
     ctx.stroke();
   }
-  $('pos').textContent = `Lembar ${state.sheet + 1} dari ${L.sheets.length}${L.sheets.length > 1 && state.mode !== 'bleed' && job().duplex ? (state.sheet % 2 ? ' · belakang' : ' · depan') : ''}`;
-  $('prev').disabled = state.sheet === 0;
-  $('next').disabled = state.sheet >= L.sheets.length - 1;
 }
 
-function outName() {
-  const base = state.file.name.replace(/\.pdf$/i, '');
-  const tag = { repeat: 'STEPREPEAT', sequential: 'NUP', 'cut-stack': 'UNIQUECOLLATE', booklet: 'BOOKLET', bleed: 'BLEED' }[state.mode];
-  return `${base}_${tag}.pdf`;
+/** The picture: the tab's own pages, or the pending layout made into a real PDF and drawn. */
+async function drawPicture() {
+  const d = activeDoc();
+  if (!d) return;
+  let bytes = d.bytes;
+  if (state.view === 'picture') {
+    if (!state.layout) return clearCanvas();
+    const key = d.id + '|' + JSON.stringify(job());
+    if (!preview || preview.key !== key) {
+      try {
+        preview = { key, bytes: state.engine.impose(d.bytes.slice(), JSON.stringify(job())) };
+      } catch (e) {
+        return say(String(e.message || e), true);
+      }
+    }
+    bytes = preview.bytes;
+  }
+  const want = state.sheet;
+  try {
+    const doc = await pdfDoc(bytes);
+    const page = await doc.getPage(want + 1);
+    if (want !== state.sheet) return; // moved on meanwhile
+    const vp1 = page.getViewport({ scale: 1 });
+    const k = Math.min(1100 / vp1.width, 760 / vp1.height);
+    const dpr = window.devicePixelRatio || 1;
+    const vp = page.getViewport({ scale: k * dpr });
+    const cv = $('cv');
+    cv.width = Math.round(vp.width);
+    cv.height = Math.round(vp.height);
+    cv.style.width = Math.round(vp.width / dpr) + 'px';
+    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  } catch (e) {
+    say('Preview gambar gagal: ' + String(e.message || e), true);
+  }
 }
 
-async function make(saveAs) {
-  if (!state.layout || !state.engine) return;
+// ---- actions ------------------------------------------------------------------------------
+async function apply() {
+  const d = activeDoc();
+  if (!d || !state.layout) return;
   state.busy = true;
   draw();
-  say('Membuat PDF…');
-  await new Promise((r) => setTimeout(r, 30));
+  say('Membuat layout…');
+  await new Promise((r) => setTimeout(r, 20));
   try {
+    const j = job();
     const t0 = performance.now();
-    const out = state.engine.impose(state.file.bytes.slice(), JSON.stringify(job()));
-    const blob = new Blob([out], { type: 'application/pdf' });
+    const out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
+    const nd = addDoc(`${d.name} › ${jobLabel(j)}`, out, [...d.tags, MODE_TAG[j.mode]]);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      say(`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik. Bisa di-layout lagi atau disimpan.`, false, true);
+    }
+  } catch (e) {
+    say(String(e.message || e), true);
+  } finally {
+    state.busy = false;
+    recompute();
+  }
+}
+
+function fileName(d) {
+  const root = d.name.split(' › ')[0] || 'impose';
+  return `${root}${d.tags.length ? '_' + d.tags.join('_') : ''}.pdf`;
+}
+
+async function save(saveAs) {
+  const d = activeDoc();
+  if (!d) return;
+  const blob = new Blob([d.bytes], { type: 'application/pdf' });
+  try {
     if (saveAs && 'showSaveFilePicker' in window) {
-      const h = await window.showSaveFilePicker({ suggestedName: outName(), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
+      const h = await window.showSaveFilePicker({ suggestedName: fileName(d), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
       const w = await h.createWritable();
       await w.write(blob);
       await w.close();
     } else {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = outName();
+      a.download = fileName(d);
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     }
-    say(`Selesai: ${outName()} · ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik`, false, true);
+    say(`Tersimpan: ${fileName(d)}`, false, true);
   } catch (e) {
-    if (e && e.name === 'AbortError') say('');
-    else say(String(e.message || e), true);
-  } finally {
-    state.busy = false;
-    draw();
+    if (!(e && e.name === 'AbortError')) say(String(e.message || e), true);
   }
 }
 
@@ -338,22 +531,51 @@ function say(t, err = false, ok = false) {
 }
 
 // ---- wiring -------------------------------------------------------------------------------
-$('file').addEventListener('change', (e) => readFile(e.target.files[0]));
+$('file').addEventListener('change', (e) => { openFile(e.target.files[0]); e.target.value = ''; });
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', (e) => readFile(e.dataTransfer.files[0]));
+drop.addEventListener('drop', (e) => openFile(e.dataTransfer.files[0]));
 $('modes').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-mode]');
   if (!b) return;
   state.mode = b.dataset.mode;
   $('modes').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  if (state.view === 'doc') state.view = 'layout';
   renderOptions();
 });
+$('views').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-view]');
+  if (!b) return;
+  state.view = b.dataset.view;
+  state.sheet = 0;
+  draw();
+});
+$('tabs').addEventListener('click', (e) => {
+  const x = e.target.closest('[data-close]');
+  if (x) {
+    const id = Number(x.dataset.close);
+    state.docs = state.docs.filter((d) => d.id !== id);
+    if (state.active === id) state.active = state.docs.length ? state.docs[state.docs.length - 1].id : null;
+    renderTabs();
+    showDocInfo();
+    recompute();
+    return;
+  }
+  const t = e.target.closest('[data-id]');
+  if (t) {
+    state.active = Number(t.dataset.id);
+    state.sheet = 0;
+    renderTabs();
+    showDocInfo();
+    recompute();
+  }
+});
 $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.sheet - 1); draw(); });
-$('next').addEventListener('click', () => { state.sheet = Math.min(state.layout.sheets.length - 1, state.sheet + 1); draw(); });
-$('make').addEventListener('click', () => make(false));
-$('saveas').addEventListener('click', () => make(true));
+$('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
+$('apply').addEventListener('click', apply);
+$('download').addEventListener('click', () => save(false));
+$('saveas').addEventListener('click', () => save(true));
 
 renderOptions();
-loadEngine().then(() => { if (state.file) readFile(new File([state.file.bytes], state.file.name)); });
+loadEngine().then(draw);

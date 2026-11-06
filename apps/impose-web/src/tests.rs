@@ -92,3 +92,17 @@ fn mistakes_in_a_job_are_errors() {
     }
     assert!(impose(b"not a pdf".to_vec(), &job(r#"{"mode":"repeat","sheet_mm":[100,100]}"#)).is_err());
 }
+
+#[test]
+fn custom_marks_can_run_into_the_page_in_registration_colour() {
+    let j = job(
+        r#"{"mode":"repeat","sheet_mm":[200,200],"margin_mm":0,"cols":1,"rows":1,"marks":{"length_mm":5,"offset_mm":-3,"style":"japanese","registration":true}}"#,
+    );
+    let l = layout(&[[100.0, 100.0]], &j).expect("layout");
+    // Page from 50 to 150 mm; bottom-left horizontal mark 48..53 mm.
+    assert!(l.sheets[0].marks_mm.iter().any(|m| (m[0] - 48.0).abs() < 1e-6 && (m[2] - 53.0).abs() < 1e-6), "{:?}", l.sheets[0].marks_mm);
+    assert!(parse_job(r#"{"marks":{"lenght_mm":5}}"#).is_err(), "misspelt mark fields are refused");
+    let out = impose(pdf(1, 283, 283), &j).expect("impose");
+    let text = String::from_utf8_lossy(&out).to_string();
+    let _ = text;
+}

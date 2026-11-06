@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
-use pdfcraft_impose::{AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, Marks, StepRepeat};
+use pdfcraft_impose::{AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat};
 use pdfcraft_print::{Content, Sheet};
 use serde::{Deserialize, Serialize};
 
@@ -93,7 +93,20 @@ impl MarginMm {
 #[serde(untagged)]
 pub enum MarksMm {
     On(bool),
-    Sized { length_mm: f64, offset_mm: f64 },
+    /// Every field optional; missing ones take the 3 mm / 3 mm / 0.5 pt black corner defaults.
+    Custom(MarksSpec),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct MarksSpec {
+    pub length_mm: Option<f64>,
+    /// Negative runs into the page: -3 with length 5 = 3 mm inside, 2 mm outside.
+    pub offset_mm: Option<f64>,
+    /// `corner` (default) or `japanese`.
+    pub style: Option<String>,
+    pub width_pt: Option<f64>,
+    pub registration: Option<bool>,
 }
 
 /// One page's visible part on a sheet.
@@ -163,7 +176,20 @@ fn step_repeat(job: &Job, fill: Fill) -> Result<StepRepeat, String> {
     s.marks = match &job.marks {
         None | Some(MarksMm::On(false)) => None,
         Some(MarksMm::On(true)) => Some(Marks::default()),
-        Some(MarksMm::Sized { length_mm, offset_mm }) => Some(Marks { length: pt(*length_mm), offset: pt(*offset_mm) }),
+        Some(MarksMm::Custom(m)) => {
+            let d = Marks::default();
+            Some(Marks {
+                length: m.length_mm.map_or(d.length, pt),
+                offset: m.offset_mm.map_or(d.offset, pt),
+                style: match m.style.as_deref().unwrap_or("corner") {
+                    "corner" => MarkStyle::Corner,
+                    "japanese" => MarkStyle::Japanese,
+                    x => return Err(bad(format!("unknown mark style {x:?}"))),
+                },
+                width: m.width_pt.unwrap_or(d.width),
+                registration: m.registration.unwrap_or(false),
+            })
+        }
     };
     Ok(s)
 }

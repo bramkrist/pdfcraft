@@ -181,20 +181,86 @@ fn a_smaller_page_is_centred_in_a_larger_cell_and_a_larger_page_is_clipped() {
 }
 
 #[test]
-fn marks_sit_outside_the_bleed_and_are_not_drawn_over_pages() {
+fn marks_start_at_the_offset_from_the_trim_and_may_cross_the_bleed() {
     let mut s = StepRepeat::new((400.0, 400.0));
     s.cols = Some(1);
     s.rows = Some(1);
     s.bleed = 9.0;
-    s.marks = Some(Marks { length: 20.0, offset: 5.0 });
+    s.marks = Some(Marks { length: 20.0, offset: 5.0, ..Marks::default() });
     let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
-    // Page at 150..250; trim at 159..241; marks start max(5, 9) = 9 pt away from the trim.
+    // Page at 150..250, trim at 159..241: marks start 5 pt off the trim, over the bleed (allowed,
+    // as smart marks do), and never over the finished page.
     let lines = &sheets[0].lines;
     assert_eq!(lines.len(), 8);
     for l in lines {
-        assert!(!overlaps(*l, [150.0, 150.0, 250.0, 250.0]), "{l:?}");
+        assert!(!overlaps(*l, [159.0, 159.0, 241.0, 241.0]), "{l:?}");
     }
-    assert!(lines.iter().any(|l| close(l[2], 159.0 - 9.0) && close(l[0], 159.0 - 9.0 - 20.0)));
+    assert!(lines.iter().any(|l| close(l[0], 134.0) && close(l[2], 154.0) && close(l[1], 159.0)));
+}
+
+#[test]
+fn a_negative_offset_runs_the_mark_into_the_page() {
+    let mut s = StepRepeat::new((400.0, 400.0));
+    s.cols = Some(1);
+    s.rows = Some(1);
+    // -3 deep, 5 long: 3 inside the trim, 2 outside.
+    s.marks = Some(Marks { length: 5.0, offset: -3.0, ..Marks::default() });
+    let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
+    let lines = &sheets[0].lines;
+    assert_eq!(lines.len(), 8);
+    // Left edge x = 150: the bottom-left horizontal mark spans 148..153 on y = 150.
+    assert!(lines.iter().any(|l| close(l[0], 148.0) && close(l[2], 153.0) && close(l[1], 150.0)), "{lines:?}");
+    // A mark wholly inside the page is refused.
+    s.marks = Some(Marks { length: 3.0, offset: -3.0, ..Marks::default() });
+    assert!(matches!(step_and_repeat(&[(100.0, 100.0)], &s), Err(ImposeError::Invalid("mark offset", _))));
+}
+
+#[test]
+fn a_mark_into_one_page_is_still_kept_off_its_neighbour() {
+    let mut s = StepRepeat::new((300.0, 200.0));
+    s.margins = Margins::uniform(20.0);
+    s.cols = Some(2);
+    s.rows = Some(1);
+    s.marks = Some(Marks { length: 5.0, offset: -3.0, ..Marks::default() });
+    // Butted pages: the inner horizontal marks would run into the neighbour, so they go.
+    let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
+    let pages: Vec<Rect> = sheets[0].placed.iter().map(|p| [origin(p).0, origin(p).1, origin(p).0 + 100.0, origin(p).1 + 100.0]).collect();
+    for l in &sheets[0].lines {
+        let crossing = pages.iter().filter(|p| overlaps([l[0] - 0.01, l[1] - 0.01, l[2] + 0.01, l[3] + 0.01], **p)).count();
+        assert!(crossing <= 1, "{l:?} runs over two pages");
+    }
+}
+
+#[test]
+fn japanese_marks_add_a_line_along_the_bleed() {
+    let mut s = StepRepeat::new((400.0, 400.0));
+    s.cols = Some(1);
+    s.rows = Some(1);
+    s.bleed = 9.0;
+    s.marks = Some(Marks { style: MarkStyle::Japanese, ..Marks::default() });
+    let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
+    assert_eq!(sheets[0].lines.len(), 16);
+    // Bleed edge at 150: a horizontal mark lies on it as well as on the trim line 159.
+    assert!(sheets[0].lines.iter().any(|l| close(l[1], 150.0) && close(l[3], 150.0)));
+}
+
+#[test]
+fn mark_paint_reaches_the_sheet() {
+    let mut s = StepRepeat::new((400.0, 400.0));
+    s.marks = Some(Marks { width: 0.25, registration: true, ..Marks::default() });
+    let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
+    assert_eq!(sheets[0].marks_paint, pdfcraft_print::MarkPaint { width: 0.25, registration: true });
+}
+
+#[test]
+fn unique_collate_rounds_automatic_columns_to_whole_blocks() {
+    // 150 mm pages on a 480 x 320 sheet fit 3 columns; with copies 2 that becomes 2.
+    let mm = 72.0 / 25.4;
+    let mut s = StepRepeat::new((480.0 * mm, 320.0 * mm));
+    s.margins = Margins::uniform(5.0 * mm);
+    s.fill = Fill::CutStack { copies: 2 };
+    let sheets = step_and_repeat(&[(150.0 * mm, 150.0 * mm); 18], &s).expect("layout");
+    assert_eq!(sheets[0].placed.len(), 4);
 }
 
 #[test]
@@ -204,7 +270,7 @@ fn marks_shared_by_neighbours_are_drawn_once() {
     s.rows = Some(1);
     s.gutter = (60.0, 0.0);
     s.bleed = 0.0;
-    s.marks = Some(Marks { length: 10.0, offset: 5.0 });
+    s.marks = Some(Marks { length: 10.0, offset: 5.0, ..Marks::default() });
     let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
     let lines = &sheets[0].lines;
     for (i, a) in lines.iter().enumerate() {
@@ -220,7 +286,7 @@ fn marks_that_would_leave_the_sheet_are_dropped() {
     let mut s = StepRepeat::new((120.0, 120.0));
     s.cols = Some(1);
     s.rows = Some(1);
-    s.marks = Some(Marks { length: 50.0, offset: 5.0 });
+    s.marks = Some(Marks { length: 50.0, offset: 5.0, ..Marks::default() });
     let sheets = step_and_repeat(&[(100.0, 100.0)], &s).expect("layout");
     assert!(sheets[0].lines.is_empty());
 }

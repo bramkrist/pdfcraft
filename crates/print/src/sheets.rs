@@ -106,6 +106,24 @@ pub struct Sheet {
     /// The finished (trimmed) area in sheet space, written as the page's `TrimBox` with the whole
     /// sheet as its `BleedBox`; `None` writes neither.
     pub trim: Option<[f64; 4]>,
+    /// How `borders` and `lines` are stroked.
+    pub marks_paint: MarkPaint,
+}
+
+/// The ink and weight of marks drawn on a sheet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MarkPaint {
+    /// Line width in points.
+    pub width: f64,
+    /// Registration colour (every separation, `/Separation /All`) instead of black on the black
+    /// plate only.
+    pub registration: bool,
+}
+
+impl Default for MarkPaint {
+    fn default() -> Self {
+        MarkPaint { width: 0.5, registration: false }
+    }
 }
 
 fn oriented(paper: (f64, f64), o: Orientation, landscape_wanted: bool) -> (f64, f64) {
