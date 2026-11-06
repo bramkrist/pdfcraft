@@ -153,6 +153,8 @@ pub struct Summary {
     pub cols: usize,
     pub rows: usize,
     pub per_sheet: usize,
+    /// Columns × rows, row by row from the top where rows differ (turned rows): "5 × 4 + 8 × 1".
+    pub layout: String,
     pub sides: usize,
     pub placed: usize,
     /// The first sheet side's page footprints and mark lines, for the preview.
@@ -178,10 +180,35 @@ fn distinct(mut v: Vec<f64>) -> usize {
     v.len()
 }
 
+/// Columns × rows of `rects`, a run of rows with the same number of pages at a time, top first.
+fn layout_label(rects: &[[f64; 4]]) -> String {
+    // Pages per row, rows found by their bottom edge (half a point apart), top row first.
+    let mut rows: Vec<(f64, usize)> = Vec::new();
+    for r in rects {
+        match rows.iter_mut().find(|(y, _)| (*y - r[1]).abs() < 0.5) {
+            Some(row) => row.1 += 1,
+            None => rows.push((r[1], 1)),
+        }
+    }
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for (_, n) in rows {
+        match runs.last_mut() {
+            Some((cols, count)) if *cols == n => *count += 1,
+            _ => runs.push((n, 1)),
+        }
+    }
+    if runs.is_empty() {
+        return "0".to_owned();
+    }
+    runs.iter().map(|(cols, count)| format!("{cols} × {count}")).collect::<Vec<_>>().join(" + ")
+}
+
 fn summarize(sheets: &[Sheet]) -> Summary {
     let first = sheets.first();
     let rects: Vec<[f64; 4]> = first.map(|s| s.placed.iter().map(|p| footprint(p.matrix.0, p.clip)).collect()).unwrap_or_default();
     Summary {
+        layout: layout_label(&rects),
         sheet: first.map_or((0.0, 0.0), |s| s.size),
         cols: distinct(rects.iter().map(|r| r[0]).collect()),
         rows: distinct(rects.iter().map(|r| r[1]).collect()),
@@ -600,7 +627,7 @@ fn summary_ui(ui: &mut egui::Ui, s: &Result<Summary, String>, unit: Unit, t: &To
                 ui.label(unit.size(s.sheet.0, s.sheet.1));
                 ui.end_row();
                 ui.label(tl!("Layout"));
-                ui.label(format!("{} × {}", s.cols, s.rows));
+                ui.label(&s.layout);
                 ui.end_row();
                 ui.label(tl!("Pages per sheet"));
                 ui.label(s.per_sheet.to_string());
@@ -747,6 +774,19 @@ mod tests {
         let d = ImposeDraft { orient: Orient::Tall, preset: 3, ..Default::default() };
         let s = d.summary(ImposeKind::StepRepeat, &[A5]).unwrap();
         assert!(s.first.as_ref().is_some_and(|f| !f.lines.is_empty()), "crop marks are on by default");
+    }
+
+    #[test]
+    fn turned_rows_are_counted_row_by_row() {
+        // Business cards on A3+ wide: straight rows and then a row turned a quarter turn, which
+        // has more columns; one "cols × rows" would be wrong.
+        let card = (90.0 * MM, 55.0 * MM);
+        let d = ImposeDraft { orient: Orient::Wide, ..Default::default() };
+        let s = d.summary(ImposeKind::StepRepeat, &[card]).unwrap();
+        assert_eq!(s.layout, "5 × 4 + 8 × 1");
+        assert_eq!(s.per_sheet, 28);
+        let d = ImposeDraft { rotate: false, orient: Orient::Wide, ..Default::default() };
+        assert_eq!(d.summary(ImposeKind::StepRepeat, &[card]).unwrap().layout, "5 × 5");
     }
 
     #[test]

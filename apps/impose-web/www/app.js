@@ -45,7 +45,7 @@ root.innerHTML = `
   <div class="brand"><div class="disc" aria-hidden="true">P</div><div class="word">IMPOSE</div></div>
   <div class="tag">PIXELINDIE · Pre-press</div>
   <div class="spacer"></div>
-  <div class="who"><span id="ver"></span> · ${esc(user)}<a href="/logout.php">Keluar</a></div>
+  <div class="who"><span id="ver"></span> · ${esc(user)}<a href="/pro.php/" title="Aplikasi PDF lengkap ala Acrobat, dengan menu Imposing">PdfCraft Pro (beta)</a><a href="/logout.php">Keluar</a></div>
 </header>
 <nav class="tabs" id="tabs" aria-label="Dokumen"></nav>
 <div class="layout">
