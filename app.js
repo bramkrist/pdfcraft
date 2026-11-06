@@ -98,7 +98,7 @@ root.innerHTML = `
         <span class="hint" id="orginfo"></span>
       </div>
       <div class="orggrid" id="orggrid" tabindex="0" aria-label="Halaman"></div>
-      <p class="hint">Klik pilih · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+klik pilih banyak · tarik untuk pindah · <kbd>R</kbd> putar · <kbd>Del</kbd> hapus · <kbd>Ctrl+C</kbd>/<kbd>Ctrl+V</kbd> salin · <kbd>Ctrl+Z</kbd> batal. Hasil jadi tab baru; link, komentar & bookmark ikut halamannya.</p>
+      <p class="hint">Klik pilih · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+klik pilih banyak · tarik untuk pindah · <kbd>R</kbd> putar · <kbd>Del</kbd> hapus · <kbd>Ctrl+C</kbd>/<kbd>Ctrl+V</kbd> salin · <kbd>Ctrl+Z</kbd> batal. Begitu pindah ke Layout (atau klik Terapkan), perubahan jadi tab baru dan layout memakai urutan baru itu. Link, komentar & bookmark ikut halamannya.</p>
     </div>
     <div class="nav" id="navbar"><button type="button" id="prev" aria-label="Sebelumnya">‹</button><span id="pos"></span><button type="button" id="next" aria-label="Berikutnya">›</button></div>
     <div class="actions">
@@ -138,12 +138,12 @@ function markFields() {
     <h2 class="sub2">Crop mark</h2>
     <div class="field">
       ${chk('marks', 'Pakai crop mark', true)}
-      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)']], 'corner')}
+      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)'], ['centred', 'Silang di sudut (seperti PAULUS)']], 'corner')}
       ${sel('mcolour', 'Warna', [['registration', 'Registration (semua plat)'], ['black', 'Hitam (plat K)']], 'registration')}
       ${num('mlen', 'Panjang (mm)', 5, 'min="0.1"')}
       ${num('moff', 'Jarak dari potong (mm)', 3)}
       ${num('mwidth', 'Tebal (pt)', 0.5, 'min="0.05"')}
-      <p class="hint full">Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.</p>
+      <p class="hint full" id="markhint">Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.</p>
     </div>`;
 }
 
@@ -214,11 +214,32 @@ function renderOptions() {
   const fb = fileBleed(activeDoc());
   const bleedInput = document.querySelector('[data-k="bleed"]');
   if (fb !== null && bleedInput) bleedInput.value = fb;
+  syncMarkFields();
   $('opts').querySelectorAll('[data-k]').forEach((el) => el.addEventListener('input', () => {
+    if (el.dataset.k === 'mstyle') {
+      const len = document.querySelector('[data-k="mlen"]');
+      // A centred cross is usually 7 mm across; the other styles 5.
+      if (len && el.value === 'centred' && Number(len.value) === 5) len.value = 7;
+      if (len && el.value !== 'centred' && Number(len.value) === 7) len.value = 5;
+      syncMarkFields();
+    }
     if (state.mode === 'manual' && !['mpage', 'snap'].includes(el.dataset.k)) manualSheetFromFields();
     recompute();
   }));
   recompute();
+}
+
+/** The distance field means nothing for centred crosses. */
+function syncMarkFields() {
+  const st = document.querySelector('[data-k="mstyle"]');
+  const off = document.querySelector('[data-k="moff"]');
+  const hint = document.getElementById('markhint');
+  if (!st || !off) return;
+  const centred = st.value === 'centred';
+  off.disabled = centred;
+  if (hint) hint.textContent = centred
+    ? 'Silang di tiap sudut luar, separuh di gambar separuh di luar. Di antara halaman cuma garis di jalur potong, tidak ada tanda di tengah layout.'
+    : 'Jarak minus = masuk ke gambar. Contoh −3 dengan panjang 5: 3 mm di dalam, 2 mm di luar.';
 }
 
 function val(k) {
@@ -1400,9 +1421,27 @@ function orgWire() {
   });
 }
 
-async function applyPages() {
+/** The page editor holds changes that are not in the tab's file yet. */
+function orgDirty(d) {
+  if (!d || !d.org) return false;
+  const it = d.org.items;
+  return it.length !== d.sizes.length || it.some((x, i) => x.blank || x.doc !== d.id || x.page !== i || x.rot);
+}
+
+/**
+ * Leaving the page editor: pending changes become a new tab first, so every layout after this
+ * reads the new page order. Returns false when that failed (the user stays in the editor).
+ */
+async function leavePages(nextView) {
   const d = activeDoc();
-  if (!d || !state.engine) return;
+  if (state.view !== 'pages' || !orgDirty(d)) return true;
+  const ok = await applyPages(nextView, true);
+  return ok;
+}
+
+async function applyPages(nextView = 'doc', auto = false) {
+  const d = activeDoc();
+  if (!d || !state.engine) return false;
   const o = orgOf(d);
   const extras = [];
   const plan = o.items.map((it) => {
@@ -1415,12 +1454,13 @@ async function applyPages() {
     }
     return { src, page: it.page, rotate: it.rot };
   });
-  if (plan.some((p) => !p)) return say('Ada halaman dari tab yang sudah ditutup. Hapus dulu halaman itu.', true);
+  if (plan.some((p) => !p)) { say('Ada halaman dari tab yang sudah ditutup. Hapus dulu halaman itu.', true); return false; }
   state.busy = true;
   draw();
   say('Menyusun halaman…');
   await new Promise((r) => setTimeout(r, 20));
   let note = null;
+  let done = false;
   try {
     const total = extras.reduce((n, x) => n + x.bytes.length, 0);
     const buf = new Uint8Array(total);
@@ -1429,9 +1469,12 @@ async function applyPages() {
     const out = state.engine.assemblePages(d.bytes.slice(), buf, new Uint32Array(extras.map((x) => x.bytes.length)), JSON.stringify(plan));
     const nd = addDoc(`${d.name} › Edit halaman`, out, [...d.tags, 'EDIT']);
     if (nd) {
-      state.view = 'doc';
+      // The edits now live in the new tab; the original tab starts clean again.
+      orgReset(d);
+      state.view = nextView;
       state.sheet = 0;
-      note = [`Tab baru: ${plan.length} halaman. Halaman yang dihapus benar-benar hilang dari file.`, false, true];
+      done = true;
+      note = [`${auto ? 'Urutan halaman baru dipakai: ' : ''}tab baru "${nd.name}" (${plan.length} halaman). Layout berikutnya memakai tab ini. Halaman yang dihapus benar-benar hilang dari file.`, false, true];
     }
   } catch (e) {
     note = ['Edit halaman gagal: ' + String(e.message || e), true];
@@ -1440,6 +1483,7 @@ async function applyPages() {
     recompute();
     if (note) say(...note);
   }
+  return done;
 }
 
 // ---- actions ------------------------------------------------------------------------------
@@ -1508,9 +1552,13 @@ const drop = $('drop');
 ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', (e) => openFile(e.dataTransfer.files[0]));
-$('modes').addEventListener('click', (e) => {
+$('modes').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-mode]');
   if (!b) return;
+  if (state.view === 'pages') {
+    if (!(await leavePages('layout'))) return;
+    state.view = 'layout';
+  }
   const prevMode = state.mode;
   const prevLayout = state.layout;
   state.mode = b.dataset.mode;
@@ -1524,9 +1572,10 @@ $('modes').addEventListener('click', (e) => {
   if (state.view === 'doc') state.view = 'layout';
   renderOptions();
 });
-$('views').addEventListener('click', (e) => {
+$('views').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-view]');
   if (!b) return;
+  if (b.dataset.view !== 'pages' && !(await leavePages(b.dataset.view))) return;
   state.view = b.dataset.view;
   state.sheet = 0;
   draw();
@@ -1576,8 +1625,8 @@ $('cv').addEventListener('pointermove', manualPointerMove);
 $('cv').addEventListener('pointerup', manualPointerUp);
 $('cv').addEventListener('pointercancel', manualPointerUp);
 document.addEventListener('keydown', manualKey);
-$('download').addEventListener('click', () => save(false));
-$('saveas').addEventListener('click', () => save(true));
+$('download').addEventListener('click', async () => { if (await leavePages('pages')) save(false); });
+$('saveas').addEventListener('click', async () => { if (await leavePages('pages')) save(true); });
 
 orgWire();
 renderOptions();
