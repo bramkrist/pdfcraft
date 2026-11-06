@@ -2,6 +2,17 @@
 /* eslint-disable */
 
 /**
+ * The result of [`outline_text`]: the new file and the report as JSON.
+ */
+export class Outlined {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly bytes: Uint8Array;
+    readonly report: string;
+}
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  */
 export function impose(pdf: Uint8Array, job_json: string): Uint8Array;
@@ -15,6 +26,11 @@ export function layout(pages_json: string, job_json: string): string;
  * `layoutPdf(pdfBytes, jobJson)`: the layout of a real file, as JSON.
  */
 export function layoutPdf(pdf: Uint8Array, job_json: string): string;
+
+/**
+ * `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
+ */
+export function outlineText(pdf: Uint8Array): Outlined;
 
 /**
  * `pageSizes(pdfBytes)`: `[[w, h], ...]` in mm, as JSON.
@@ -35,9 +51,13 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_outlined_free: (a: number, b: number) => void;
     readonly impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly outlineText: (a: number, b: number) => [number, number, number];
+    readonly outlined_bytes: (a: number) => [number, number];
+    readonly outlined_report: (a: number) => [number, number];
     readonly pageSizes: (a: number, b: number) => [number, number, number, number];
     readonly preflight: (a: number, b: number) => [number, number, number, number];
     readonly version: () => [number, number];

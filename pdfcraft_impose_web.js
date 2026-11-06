@@ -1,6 +1,53 @@
 /* @ts-self-types="./pdfcraft_impose_web.d.ts" */
 
 /**
+ * The result of [`outline_text`]: the new file and the report as JSON.
+ */
+export class Outlined {
+    static __wrap(ptr) {
+        const obj = Object.create(Outlined.prototype);
+        obj.__wbg_ptr = ptr;
+        OutlinedFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        OutlinedFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_outlined_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get bytes() {
+        const ret = wasm.outlined_bytes(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    get report() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.outlined_report(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) Outlined.prototype[Symbol.dispose] = Outlined.prototype.free;
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  * @param {Uint8Array} pdf
  * @param {string} job_json
@@ -76,6 +123,21 @@ export function layoutPdf(pdf, job_json) {
     } finally {
         wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
+}
+
+/**
+ * `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
+ * @param {Uint8Array} pdf
+ * @returns {Outlined}
+ */
+export function outlineText(pdf) {
+    const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.outlineText(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return Outlined.__wrap(ret[0]);
 }
 
 /**
@@ -227,6 +289,10 @@ function __wbg_get_imports() {
         "./pdfcraft_impose_web_bg.js": import0,
     };
 }
+
+const OutlinedFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_outlined_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();

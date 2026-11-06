@@ -324,6 +324,7 @@ function renderPreflight(d) {
       ${r.inks.rgb ? '<span class="tagchip warn">RGB</span>' : ''}${r.inks.registration ? '<span class="tagchip warn">Registration</span>' : ''}${r.inks.lab ? '<span class="tagchip warn">Lab</span>' : ''}</div>
     ${spots ? `<ul class="plain spots">${spots}</ul>` : ''}
     <ul class="pflist">${rows}</ul>
+    ${r.fonts.length ? `<div class="fix"><button type="button" class="btn ghost small" id="do-outline">Outline semua teks</button><span class="hint">Jadi tab baru. Font tertanam diubah jadi kurva, tampilan sama. Font yang tidak tertanam tidak bisa di-outline.</span></div>` : ''}
     ${fonts ? `<details><summary>Font (${r.fonts.length})</summary><ul class="plain">${fonts}</ul></details>` : ''}
     ${imgs ? `<details><summary>Gambar (${r.images.length})</summary><ul class="plain">${imgs}</ul></details>` : ''}`;
 }
@@ -334,6 +335,37 @@ function fileBleed(d) {
   if (!b.length || b.some((x) => !x)) return null;
   const min = Math.min(...b.flat());
   return min > 0.05 ? Math.round(min * 10) / 10 : null;
+}
+
+async function outlineActive() {
+  const d = activeDoc();
+  if (!d || !state.engine) return;
+  state.busy = true;
+  draw();
+  say('Mengubah teks jadi outline…');
+  await new Promise((r) => setTimeout(r, 20));
+  try {
+    const t0 = performance.now();
+    const res = state.engine.outlineText(d.bytes.slice());
+    const rep = JSON.parse(res.report);
+    const bytes = res.bytes;
+    if (!rep.outlined) {
+      say(rep.kept.length ? `Tidak ada teks yang bisa di-outline: ${rep.kept.map((k) => `hal. ${k.page} ${k.reason}`).slice(0, 4).join('; ')}` : 'Tidak ada teks untuk di-outline.', !!rep.kept.length);
+      return;
+    }
+    const nd = addDoc(`${d.name} › Outline`, bytes, [...d.tags, 'OUTLINE']);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      const kept = rep.kept.length ? ` ${rep.kept.length} bagian dibiarkan sebagai teks: ${[...new Set(rep.kept.map((k) => `hal. ${k.page} (${k.reason})`))].slice(0, 4).join(', ')}.` : '';
+      say(`Outline selesai: ${rep.outlined} blok teks, ${rep.glyphs} huruf, ${fmt((performance.now() - t0) / 1000, 1)} detik.${kept}`, !!rep.kept.length, !rep.kept.length);
+    }
+  } catch (e) {
+    say('Outline gagal: ' + String(e.message || e), true);
+  } finally {
+    state.busy = false;
+    recompute();
+  }
 }
 
 function showDocInfo() {
@@ -633,6 +665,7 @@ $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.shee
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
 $('apply').addEventListener('click', apply);
 $('ack').addEventListener('change', draw);
+$('pf').addEventListener('click', (e) => { if (e.target.closest('#do-outline')) outlineActive(); });
 $('download').addEventListener('click', () => save(false));
 $('saveas').addEventListener('click', () => save(true));
 
