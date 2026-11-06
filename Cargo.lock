@@ -4502,6 +4502,7 @@ version = "0.18.1"
 dependencies = [
  "pdfcraft-cos",
  "pdfcraft-impose",
+ "pdfcraft-prepress",
  "pdfcraft-print",
  "serde",
  "serde_json",
@@ -4616,6 +4617,16 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-model",
  "roxmltree 0.21.2",
+]
+
+[[package]]
+name = "pdfcraft-prepress"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-model",
+ "serde",
 ]
 
 [[package]]

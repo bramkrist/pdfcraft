@@ -106,3 +106,28 @@ canvas { max-width: 100%; height: auto; background: #fff; box-shadow: 0 1px 3px 
 .msg.err { border-color: var(--danger); background: #FEF3F2; }
 .msg.ok { border-color: var(--ok); background: #ECFDF3; }
 @media (max-width: 900px) { .tabs { padding: var(--sp-2) var(--sp-4) 0; } }
+
+.pfhead { display: flex; align-items: center; gap: var(--sp-2); font-weight: 700; margin-bottom: var(--sp-3); }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--line-strong); }
+.pfhead .dot { margin-top: 0; }
+.pf-pass .dot { background: var(--ok); }
+.pf-warn .dot { background: #D9A400; }
+.pf-fail .dot { background: var(--danger); }
+.pf-info .dot { background: var(--navy); }
+.pflist, .plain { list-style: none; margin: 0; padding: 0; }
+.pflist li { display: flex; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: 1px solid var(--line); font-size: 14px; }
+.pflist .st { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.pf-fail .st { color: var(--danger); }
+.pfmsg { color: var(--ink); }
+.inks { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+.ink { width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font-weight: 700; font-size: 12px; border: 1px solid var(--line-strong); }
+.ink.off { opacity: .25; }
+.ink.c { background: #00A0E0; color: #fff; } .ink.m { background: #E5007E; color: #fff; } .ink.y { background: #FFE600; color: var(--ink); } .ink.k { background: #111; color: #fff; }
+.ink.spot { width: 12px; height: 12px; background: var(--orange); margin-right: var(--sp-2); vertical-align: -1px; }
+.tagchip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); }
+.tagchip.warn { background: #FFF8DB; border-color: #D9A400; }
+.spots li, .plain li { font-size: 14px; padding: 2px 0; }
+details { margin-top: var(--sp-3); font-size: 14px; }
+summary { cursor: pointer; font-weight: 600; }
+.bad { color: var(--danger); } .meh { color: #9A6B00; }
+.ack { font-size: 14px; max-width: 360px; }

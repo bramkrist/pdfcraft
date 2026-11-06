@@ -8227,6 +8227,18 @@ evidence = ["crates/impose/src/bleed_tests.rs::the_parts_tile_the_sheet_for_any_
 notes = "Pages grow by a uniform or per-side bleed and get a TrimBox at the old edge and a BleedBox around the new page. Mirror reflects each edge strip outward (corners across both edges); scale enlarges the page about its centre. Both are placements of the original page form written through pdfcraft-print's sheet writer, so images, fonts and colour spaces are not rewritten or rasterised; the mirrored strips are checked to tile the new page exactly and by rendering. Not yet: a dialog and command (headless tool only), taking an existing TrimBox as the edge, extending edge colours, removing or cropping an existing bleed, per-page amounts, and honouring a page rotation that differs between pages."
 
 [[feature]]
+id = "print.prepress-preflight"
+title = "Press-room preflight: bleed, fonts, image resolution and missing images, inks and spot colours, rich black, hairlines, transparency, overprint"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/prepress/src/tests.rs::the_usual_problems_are_all_found", "crates/prepress/src/tests.rs::image_resolution_is_measured_where_the_image_is_placed", "crates/prepress/src/tests.rs::a_clean_cmyk_file_with_bleed_passes", "crates/prepress/src/tests.rs::forms_are_followed_with_their_matrix_and_cycles_stop"]
+notes = "pdfcraft-prepress interprets content streams for the graphics state only (matrix, colours, line width, text size), following forms with their matrices and stopping at cycles. Reports page boxes and bleed per side, fonts (embedded, subset, Type 3), images with effective resolution where placed and images that are not in the file (/F, OPI, broken references), process inks used, spot colours by name (finishing layers such as CutContour told apart), registration colour, RGB/Lab/ICC, small rich-black text, hairlines, transparency, overprint, the largest vector ink total and the output intent; checks() judges them with PIXELINDIE's upload-preflight thresholds. Read-only. Not yet: an automation tool, ink totals inside images (needs rendering), separation preview, ink manager edits (spot to process, aliases), outline text, transparency flattening."
+
+[[feature]]
 id = "print.page-range"
 title = "Print all, current page or a range (labels allowed)"
 area = "L"

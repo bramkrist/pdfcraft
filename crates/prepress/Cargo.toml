@@ -1,0 +1,15 @@
+[package]
+name = "pdfcraft-prepress"
+description = "Print preflight for a press room: page boxes and bleed, fonts, image resolution and missing images, colour spaces and inks (process, spot, registration), small rich-black text, hairlines, transparency, overprint and output intents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-content = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
+serde = { workspace = true }

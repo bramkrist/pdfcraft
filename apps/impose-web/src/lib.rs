@@ -340,6 +340,22 @@ pub fn impose(pdf: Vec<u8>, job: &Job) -> Result<Vec<u8>, String> {
     pdfcraft_print::impose_sheets(&doc, &s, content(job)?).map_err(|e| e.to_string())
 }
 
+/// Press-room preflight of `pdf`: what was found, each check, and the worst outcome.
+#[derive(Serialize)]
+pub struct Preflight {
+    pub overall: pdfcraft_prepress::Status,
+    pub checks: Vec<pdfcraft_prepress::Check>,
+    pub report: pdfcraft_prepress::Report,
+}
+
+pub fn preflight(pdf: Vec<u8>) -> Result<Preflight, String> {
+    let doc = open(pdf)?;
+    let th = pdfcraft_prepress::Thresholds::default();
+    let report = pdfcraft_prepress::analyze_with(&doc, &th);
+    let checks = pdfcraft_prepress::checks(&report, &th);
+    Ok(Preflight { overall: pdfcraft_prepress::overall(&checks), checks, report })
+}
+
 fn parse_job(json: &str) -> Result<Job, String> {
     serde_json::from_str(json).map_err(|e| format!("job: {e}"))
 }
@@ -379,6 +395,12 @@ mod wasm {
     #[wasm_bindgen]
     pub fn impose(pdf: Vec<u8>, job_json: &str) -> Result<Vec<u8>, JsError> {
         super::impose(pdf, &super::parse_job(job_json).map_err(js)?).map_err(js)
+    }
+
+    /// `preflight(pdfBytes)`: `{ overall, checks: [{id, title, status, message}], report }` as JSON.
+    #[wasm_bindgen]
+    pub fn preflight(pdf: Vec<u8>) -> Result<String, JsError> {
+        to_json(&super::preflight(pdf).map_err(js)?)
     }
 
     /// The engine version, to show in the UI and record with a job.
