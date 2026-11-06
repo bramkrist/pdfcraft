@@ -361,6 +361,14 @@ pub fn outline(pdf: Vec<u8>) -> Result<(Vec<u8>, pdfcraft_prepress::outline::Out
     pdfcraft_prepress::outline::outline_text(pdf)
 }
 
+/// Spot colours merged or printed in process (see `pdfcraft_prepress::inks`). `actions_json` maps
+/// a spot name to `{"action": "to-process"}` or `{"action": "alias", "into": "<other spot>"}`.
+pub fn inks(pdf: Vec<u8>, actions_json: &str) -> Result<(Vec<u8>, pdfcraft_prepress::inks::InkReport), String> {
+    let actions: std::collections::BTreeMap<String, pdfcraft_prepress::inks::InkAction> =
+        serde_json::from_str(actions_json).map_err(|e| format!("inks: {e}"))?;
+    pdfcraft_prepress::inks::manage_inks(pdf, &actions)
+}
+
 fn parse_job(json: &str) -> Result<Job, String> {
     serde_json::from_str(json).map_err(|e| format!("job: {e}"))
 }
@@ -408,15 +416,15 @@ mod wasm {
         to_json(&super::preflight(pdf).map_err(js)?)
     }
 
-    /// The result of [`outline_text`]: the new file and the report as JSON.
+    /// A changed file and the report of what changed, as JSON.
     #[wasm_bindgen]
-    pub struct Outlined {
+    pub struct Converted {
         bytes: Vec<u8>,
         report: String,
     }
 
     #[wasm_bindgen]
-    impl Outlined {
+    impl Converted {
         #[wasm_bindgen(getter)]
         pub fn bytes(&self) -> Vec<u8> {
             self.bytes.clone()
@@ -429,9 +437,16 @@ mod wasm {
 
     /// `outlineText(pdfBytes)`: `{ bytes, report }`, every embedded-font glyph as a path.
     #[wasm_bindgen(js_name = outlineText)]
-    pub fn outline_text(pdf: Vec<u8>) -> Result<Outlined, JsError> {
+    pub fn outline_text(pdf: Vec<u8>) -> Result<Converted, JsError> {
         let (bytes, report) = super::outline(pdf).map_err(js)?;
-        Ok(Outlined { bytes, report: to_json(&report)? })
+        Ok(Converted { bytes, report: to_json(&report)? })
+    }
+
+    /// `manageInks(pdfBytes, actionsJson)`: `{ bytes, report }` with spots merged or made process.
+    #[wasm_bindgen(js_name = manageInks)]
+    pub fn manage_inks(pdf: Vec<u8>, actions_json: &str) -> Result<Converted, JsError> {
+        let (bytes, report) = super::inks(pdf, actions_json).map_err(js)?;
+        Ok(Converted { bytes, report: to_json(&report)? })
     }
 
     /// The engine version, to show in the UI and record with a job.

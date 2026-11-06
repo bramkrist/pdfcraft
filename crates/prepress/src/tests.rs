@@ -185,3 +185,40 @@ fn a_font_that_is_selected_but_never_shows_text_is_not_a_problem() {
     let r = analyze(&doc);
     assert!(r.fonts.is_empty(), "{:?}", r.fonts);
 }
+
+#[test]
+fn ink_total_inside_cmyk_images_is_measured() {
+    // 2 x 2 px CMYK: one pixel at 400 %, three at 0. With a [1 0 ...] Decode the same bytes read
+    // as three pixels at 400 % and one at 0.
+    let res = "<< /XObject << /Im 3 0 R /Inv 4 0 R >> >>";
+    let hex = "FFFFFFFF000000000000000000000000>";
+    let img = |decode: &str| {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceCMYK /BitsPerComponent 8 {decode} /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}\nendstream",
+            hex.len()
+        )
+    };
+    let (plain, inv) = (img(""), img("/Decode [1 0 1 0 1 0 1 0]"));
+    let doc = open(build(&[(res, "q 100 0 0 100 0 0 cm /Im Do Q q 100 0 0 100 0 200 cm /Inv Do Q", "")], &[&plain, &inv], ""));
+    let r = analyze(&doc);
+    let tacs: Vec<_> = r.images.iter().map(|i| i.tac).collect();
+    assert_eq!(tacs, vec![Some(ImageTac { max: 400.0, over: 0.25 }), Some(ImageTac { max: 400.0, over: 0.75 })]);
+    let c = checks(&r, &Thresholds::default());
+    let tac = check(&c, "ink_coverage");
+    assert_eq!(tac.status, Status::Warn, "{tac:?}");
+    assert!(tac.message.contains("2 gambar"), "{}", tac.message);
+}
+
+#[test]
+fn a_cmyk_image_under_the_limit_passes() {
+    let res = "<< /XObject << /Im 3 0 R >> >>";
+    let hex = "40404040>";
+    let img = format!(
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}\nendstream",
+        hex.len()
+    );
+    let doc = open(build(&[(res, "q 100 0 0 100 0 0 cm /Im Do Q", "")], &[&img], ""));
+    let c = checks(&analyze(&doc), &Thresholds::default());
+    let tac = check(&c, "ink_coverage");
+    assert_eq!(tac.status, Status::Pass, "{tac:?}");
+}

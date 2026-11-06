@@ -8199,7 +8199,7 @@ milestone = "M10"
 status = "partial"
 commands = []
 tools = ["doc_impose"]
-evidence = ["crates/impose/src/tests.rs::repeat_fits_as_many_copies_as_the_sheet_holds", "crates/impose/src/tests.rs::gutter_is_the_exact_space_between_neighbours", "crates/impose/src/tests.rs::duplex_back_cell_sits_exactly_behind_its_front_cell", "crates/impose/src/tests.rs::marks_sit_outside_the_bleed_and_are_not_drawn_over_pages", "crates/impose/tests/pdf.rs::step_and_repeat_puts_the_card_in_every_cell_and_nothing_in_the_gutter", "crates/impose/tests/pdf.rs::the_back_page_is_printed_behind_the_front_cell_when_the_sheet_is_turned", "crates/automation/tests/it/automation.rs::imposing_on_press_sheets_through_tools", "crates/impose/src/tests.rs::unique_collate_matches_the_shop_floor_example", "crates/impose/src/tests.rs::every_cut_stack_reads_in_page_order_through_the_sheets", "crates/automation/tests/it/automation.rs::cut_and_stack_through_tools"]
+evidence = ["crates/impose/src/tests.rs::repeat_fits_as_many_copies_as_the_sheet_holds", "crates/impose/src/tests.rs::gutter_is_the_exact_space_between_neighbours", "crates/impose/src/tests.rs::duplex_back_cell_sits_exactly_behind_its_front_cell", "crates/impose/src/tests.rs::marks_start_at_the_offset_from_the_trim_and_may_cross_the_bleed", "crates/impose/tests/pdf.rs::step_and_repeat_puts_the_card_in_every_cell_and_nothing_in_the_gutter", "crates/impose/tests/pdf.rs::the_back_page_is_printed_behind_the_front_cell_when_the_sheet_is_turned", "crates/automation/tests/it/automation.rs::imposing_on_press_sheets_through_tools", "crates/impose/src/tests.rs::unique_collate_matches_the_shop_floor_example", "crates/impose/src/tests.rs::every_cut_stack_reads_in_page_order_through_the_sheets", "crates/automation/tests/it/automation.rs::cut_and_stack_through_tools"]
 notes = "Layout geometry in crates/impose (points; no PDF objects), written through pdfcraft-print's sheet writer so vector pages are never rasterised. Step & repeat (one page across a grid per sheet), gang n-up (consecutive pages in reading order), cut & stack / unique collate with a repeated block, gutters, centred grid, fixed cell with centring and clipping, duplex backs mirrored over the long or short edge so each back cell lies behind its front cell, corner trim marks outside the bleed, named press sheets (A5-A3, A3+, SRA4, SRA3, 12x18, 13x19). Checked by rendering the imposed PDF; not yet compared with a physical press proof or another imposition tool. Not yet: a dialog and command (headless tool only), creep, work-and-turn/tumble, perfect-bound and saddle signatures with marks, automatic cell rotation, colour bars, registration marks, page-box (TrimBox) driven cells, and printing under a high-quality-print restriction (refused rather than rasterised)."
 
 [[feature]]
@@ -8236,7 +8236,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/prepress/src/tests.rs::the_usual_problems_are_all_found", "crates/prepress/src/tests.rs::image_resolution_is_measured_where_the_image_is_placed", "crates/prepress/src/tests.rs::a_clean_cmyk_file_with_bleed_passes", "crates/prepress/src/tests.rs::forms_are_followed_with_their_matrix_and_cycles_stop"]
-notes = "pdfcraft-prepress interprets content streams for the graphics state only (matrix, colours, line width, text size), following forms with their matrices and stopping at cycles. Reports page boxes and bleed per side, fonts (embedded, subset, Type 3), images with effective resolution where placed and images that are not in the file (/F, OPI, broken references), process inks used, spot colours by name (finishing layers such as CutContour told apart), registration colour, RGB/Lab/ICC, small rich-black text, hairlines, transparency, overprint, the largest vector ink total and the output intent; checks() judges them with PIXELINDIE's upload-preflight thresholds. Read-only. Not yet: an automation tool, ink totals inside images (needs rendering), separation preview, ink manager edits (spot to process, aliases), outline text, transparency flattening."
+notes = "pdfcraft-prepress interprets content streams for the graphics state only (matrix, colours, line width, text size), following forms with their matrices and stopping at cycles. Reports page boxes and bleed per side, fonts (embedded, subset, Type 3), images with effective resolution where placed and images that are not in the file (/F, OPI, broken references), process inks used, spot colours by name (finishing layers such as CutContour told apart), registration colour, RGB/Lab/ICC, small rich-black text, hairlines, transparency, overprint, the largest vector ink total, the ink total of every 8-bit CMYK image (decoded as the renderer decodes it, Decode arrays applied; an image counts when more than 0.1% of its pixels go over) and the output intent; checks() judges them with PIXELINDIE's upload-preflight thresholds. Read-only. Not yet: an automation tool, ink totals of 16-bit, ICC-converted RGB or spot images, separation preview, transparency flattening."
 
 [[feature]]
 id = "print.outline-text"
@@ -8249,6 +8249,18 @@ commands = []
 tools = []
 evidence = ["crates/prepress/src/outline_tests.rs::embedded_text_becomes_paths_that_look_the_same", "crates/prepress/src/outline_tests.rs::text_in_a_font_that_is_not_embedded_stays_text_and_is_reported", "crates/prepress/src/outline_tests.rs::clipping_and_invisible_text"]
 notes = "pdfcraft-prepress::outline records glyphs through the renderer's interpreter (so encodings, CID maps, spacing and every embedded font format it reads are resolved as they render), maps them back onto each BT..ET block by counting glyph draws, and replaces the block with one form XObject per distinct glyph shape placed with the glyph's matrix, keeping colour, graphics-state, text-state and marked-content operators in place. Everything else is copied byte for byte and saved incrementally. Checked by rendering: 0.0000% of pixels differ on 241 pages of five real files (a 174-page manual, LaTeX Type 1 docs, a TrueType showcase). Kept as text and reported: fonts that are not embedded, Type 3 fonts, clipping text, pages whose glyph count does not map exactly. Not yet: an automation tool, outlining annotation appearances, removing now-unused font resources."
+
+[[feature]]
+id = "print.ink-manager"
+title = "Ink manager: merge two spot names onto one plate, or print a spot in process colours"
+area = "L"
+tier = "P1"
+milestone = "M11"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/prepress/src/inks_tests.rs::spot_to_process_prints_its_own_alternate_and_looks_the_same", "crates/prepress/src/inks_tests.rs::alias_puts_two_names_on_one_plate_without_touching_values", "crates/prepress/src/inks_tests.rs::spot_images_and_shadings_are_kept_and_reported"]
+notes = "pdfcraft-prepress::inks. Alias renames the colorant in every Separation and DeviceN colour space (values untouched; refused when it would list a colorant twice). To process rewrites cs/scn/CS/SCN in page and form content into k/rg/g with the spot's own alternate, evaluated through its tint transform (Type 2 directly, Type 0/4 through the renderer's function evaluator), tracking q/Q; everything else is copied byte for byte and saved incrementally. Checked by rendering: at most 2/255 per channel differs on a page with Type 2 and Type 4 spots in fills, strokes and a form, and a 20% tint error is caught. Kept and reported: images, shadings and patterns in the spot, DeviceN mixes, alternates other than DeviceCMYK/RGB/Gray. Not yet: an automation tool, converting images and shadings, annotation appearances, Acrobat's per-session (print-time only) ink mapping."
 
 [[feature]]
 id = "print.page-range"
@@ -8553,18 +8565,6 @@ notes = ""
 [[feature]]
 id = "print.convert-colors"
 title = "Convert colours"
-area = "L"
-tier = "P1"
-milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
-
-[[feature]]
-id = "print.ink-manager"
-title = "Ink manager"
 area = "L"
 tier = "P1"
 milestone = "M11"

@@ -4631,6 +4631,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-render",
  "serde",
+ "smallvec",
 ]
 
 [[package]]

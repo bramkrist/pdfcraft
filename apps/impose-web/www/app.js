@@ -314,15 +314,23 @@ function renderPreflight(d) {
   const pf = d.pf;
   const r = pf.report;
   const ink = (on, name, cls) => `<span class="ink ${cls} ${on ? 'on' : 'off'}" title="${name}${on ? ' dipakai' : ' tidak dipakai'}">${name[0]}</span>`;
-  const spots = r.inks.spots.map((s) => `<li><span class="ink spot on"></span>${esc(s.name)} <span class="hint">hal. ${s.pages.join(', ')}</span></li>`).join('');
+  const names = r.inks.spots.map((s) => s.name);
+  const spots = r.inks.spots
+    .map((s, i) => {
+      const finishing = FINISHING.test(s.name);
+      const others = names.filter((n) => n !== s.name).map((n) => `<option value="alias:${esc(n)}">Gabung ke ${esc(n)}</option>`).join('');
+      return `<li class="spotrow"><span class="ink spot on"></span><span class="spotname">${esc(s.name)} <span class="hint">hal. ${s.pages.join(', ')}${finishing ? ' · layer produksi' : ''}</span></span>
+        <select class="inkact" data-i="${i}" aria-label="Tindakan untuk ${esc(s.name)}"><option value="keep">Biarkan (plat sendiri)</option>${finishing ? '' : '<option value="process">Jadikan CMYK</option>'}${others}</select></li>`;
+    })
+    .join('');
   const rows = pf.checks.map((c) => `<li class="pf-${c.status}"><span class="dot"></span><div><b>${esc(c.title)}</b> <span class="st">${STATUS_TEXT[c.status] || c.status}</span><br><span class="pfmsg">${esc(c.message)}</span></div></li>`).join('');
   const fonts = r.fonts.map((f) => `<li>${f.embedded ? '' : '<b class="bad">TIDAK TERTANAM</b> '}${esc(f.name)} <span class="hint">${esc(f.subtype)}${f.subset ? ' · subset' : ''}</span></li>`).join('');
-  const imgs = r.images.slice(0, 50).map((i) => `<li class="${i.missing || i.ppi < 200 ? 'bad' : i.ppi < 300 ? 'meh' : ''}">hal. ${i.page} · ${i.missing ? esc(i.missing) : `${Math.round(i.ppi)} DPI · ${i.width_px}×${i.height_px} px · ${fmt(i.size_mm[0], 0)}×${fmt(i.size_mm[1], 0)} mm · ${esc(i.colour)}`}</li>`).join('');
+  const imgs = r.images.slice(0, 50).map((i) => `<li class="${i.missing || i.ppi < 200 ? 'bad' : i.ppi < 300 ? 'meh' : ''}">hal. ${i.page} · ${i.missing ? esc(i.missing) : `${Math.round(i.ppi)} DPI · ${i.width_px}×${i.height_px} px · ${fmt(i.size_mm[0], 0)}×${fmt(i.size_mm[1], 0)} mm · ${esc(i.colour)}${i.tac ? ` · TAC ${Math.round(i.tac.max)}%${i.tac.over > 0.001 ? ` (${fmt(i.tac.over * 100, 1)}% piksel di atas batas)` : ''}` : ''}`}</li>`).join('');
   $('pf').innerHTML = `
     <div class="pfhead pf-${pf.overall}"><span class="dot"></span>${pf.overall === 'pass' ? 'Siap cetak' : pf.overall === 'warn' ? 'Ada yang perlu dicek' : 'Ada masalah'}</div>
     <div class="inks">${ink(r.inks.cyan, 'Cyan', 'c')}${ink(r.inks.magenta, 'Magenta', 'm')}${ink(r.inks.yellow, 'Yellow', 'y')}${ink(r.inks.black, 'Black', 'k')}
       ${r.inks.rgb ? '<span class="tagchip warn">RGB</span>' : ''}${r.inks.registration ? '<span class="tagchip warn">Registration</span>' : ''}${r.inks.lab ? '<span class="tagchip warn">Lab</span>' : ''}</div>
-    ${spots ? `<ul class="plain spots">${spots}</ul>` : ''}
+    ${spots ? `<div class="inkman"><b>Ink manager</b><ul class="plain spots">${spots}</ul><div class="fix"><button type="button" class="btn ghost small" id="do-inks" disabled>Terapkan tinta</button><span class="hint">Jadi tab baru. "Jadikan CMYK" memakai warna alternatif dari file itu sendiri (yang tampil di layar). "Gabung" menyatukan dua nama spot jadi satu plat. Gambar/gradasi dalam spot dibiarkan dan dilaporkan.</span></div></div>` : ''}
     <ul class="pflist">${rows}</ul>
     ${r.fonts.length ? `<div class="fix"><button type="button" class="btn ghost small" id="do-outline">Outline semua teks</button><span class="hint">Jadi tab baru. Font tertanam diubah jadi kurva, tampilan sama. Font yang tidak tertanam tidak bisa di-outline.</span></div>` : ''}
     ${fonts ? `<details><summary>Font (${r.fonts.length})</summary><ul class="plain">${fonts}</ul></details>` : ''}
@@ -335,6 +343,55 @@ function fileBleed(d) {
   if (!b.length || b.some((x) => !x)) return null;
   const min = Math.min(...b.flat());
   return min > 0.05 ? Math.round(min * 10) / 10 : null;
+}
+
+const FINISHING = /cut|dieline|die line|foil|varnish|spot ?uv|white|emboss|crease|perfor/i;
+
+/** The ink actions chosen in the panel, as the engine wants them. */
+function inkActions() {
+  const d = activeDoc();
+  const spots = d && d.pf ? d.pf.report.inks.spots : [];
+  const out = {};
+  document.querySelectorAll('.inkact').forEach((sel) => {
+    const s = spots[Number(sel.dataset.i)];
+    if (!s || sel.value === 'keep') return;
+    out[s.name] = sel.value === 'process' ? { action: 'to-process' } : { action: 'alias', into: sel.value.slice(6) };
+  });
+  return out;
+}
+
+async function inksActive() {
+  const d = activeDoc();
+  const actions = inkActions();
+  if (!d || !state.engine || !Object.keys(actions).length) return;
+  state.busy = true;
+  draw();
+  say('Mengubah tinta…');
+  await new Promise((r) => setTimeout(r, 20));
+  try {
+    const res = state.engine.manageInks(d.bytes.slice(), JSON.stringify(actions));
+    const rep = JSON.parse(res.report);
+    const done = [
+      ...Object.entries(rep.converted).map(([n, c]) => `${n} → CMYK (${c}×)`),
+      ...Object.entries(rep.aliased).map(([n]) => `${n} → ${actions[n] && actions[n].into}`),
+    ];
+    if (!done.length) {
+      say(rep.kept.length ? `Tidak ada yang bisa diubah: ${rep.kept.slice(0, 4).join('; ')}` : 'Tidak ada yang berubah.', true);
+      return;
+    }
+    const nd = addDoc(`${d.name} › Tinta`, res.bytes, [...d.tags, 'INK']);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      const kept = rep.kept.length ? ` Dibiarkan: ${[...new Set(rep.kept)].slice(0, 4).join('; ')}.` : '';
+      say(`Tinta diubah: ${done.join(', ')}.${kept}`, !!rep.kept.length, !rep.kept.length);
+    }
+  } catch (e) {
+    say('Ubah tinta gagal: ' + String(e.message || e), true);
+  } finally {
+    state.busy = false;
+    recompute();
+  }
 }
 
 async function outlineActive() {
@@ -665,7 +722,15 @@ $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.shee
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
 $('apply').addEventListener('click', apply);
 $('ack').addEventListener('change', draw);
-$('pf').addEventListener('click', (e) => { if (e.target.closest('#do-outline')) outlineActive(); });
+$('pf').addEventListener('click', (e) => {
+  if (e.target.closest('#do-outline')) outlineActive();
+  if (e.target.closest('#do-inks')) inksActive();
+});
+$('pf').addEventListener('change', (e) => {
+  if (!e.target.closest('.inkact')) return;
+  const b = $('do-inks');
+  if (b) b.disabled = !Object.keys(inkActions()).length;
+});
 $('download').addEventListener('click', () => save(false));
 $('saveas').addEventListener('click', () => save(true));
 

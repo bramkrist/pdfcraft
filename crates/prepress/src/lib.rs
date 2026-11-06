@@ -20,6 +20,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod inks;
 pub mod outline;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -34,6 +35,8 @@ const MAX_DEPTH: usize = 16;
 /// Operators interpreted per document at most (a defence against pathological files).
 const MAX_OPS: usize = 20_000_000;
 /// Largest content stream decoded.
+/// Largest decoded CMYK image measured for ink total (bytes).
+const MAX_IMAGE_BYTES: usize = 192 << 20;
 const MAX_STREAM: usize = 256 << 20;
 
 /// Limits a check is judged against.
@@ -108,6 +111,17 @@ pub struct ImageUse {
     pub soft_mask: bool,
     /// Image data not in the file: an external stream (`/F`), an OPI proxy, or a missing object.
     pub missing: Option<String>,
+    /// For 8-bit CMYK images: the highest C+M+Y+K of any pixel, percent, and the share of
+    /// pixels above the TAC limit.
+    pub tac: Option<ImageTac>,
+}
+
+/// Ink total inside one CMYK image.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+pub struct ImageTac {
+    pub max: f64,
+    /// 0..1.
+    pub over: f64,
 }
 
 /// One spot colour.
@@ -299,6 +313,10 @@ struct Walker<'a> {
     page: usize,
     ops: usize,
     th: Thresholds,
+    /// The renderer's view of the same file, opened when the first CMYK image needs decoding.
+    pixels: Option<Option<hayro::hayro_interpret::hayro_syntax::Pdf>>,
+    /// Image TAC already measured, per image object.
+    tacs: HashMap<ObjRef, Option<ImageTac>>,
 }
 
 fn num(o: Option<&Object>) -> f64 {
@@ -439,7 +457,7 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn image(&mut self, dict: &Dict, inline: bool, ctm: &Matrix, fill: &Colour, res: &Dict, missing: Option<String>) {
+    fn image(&mut self, dict: &Dict, inline: bool, ctm: &Matrix, fill: &Colour, res: &Dict, (missing, obj): (Option<String>, Option<ObjRef>)) {
         let [a, b, c, d, _, _] = ctm.0;
         let w_pt = (a * a + b * b).sqrt();
         let h_pt = (c * c + d * d).sqrt();
@@ -448,6 +466,7 @@ impl<'a> Walker<'a> {
         };
         let (wpx, hpx) = (get(b"Width", b"W"), get(b"Height", b"H"));
         let is_mask = matches!(dict.get(b"ImageMask").or_else(|| if inline { dict.get(b"IM") } else { None }), Some(Object::Bool(true)));
+        let mut cmyk = false;
         let colour = if is_mask {
             self.use_colour(&fill.clone());
             "mask (warna isi)".to_string()
@@ -463,6 +482,7 @@ impl<'a> Walker<'a> {
                 Kind::Indexed(_) => "Indexed",
                 _ => "lain",
             };
+            cmyk = k == Kind::Cmyk;
             let c = initial(k, icc);
             // A process image may use any of its inks; count them all.
             let c = Colour { values: vec![1.0; c.values.len()], nominal: true, ..c };
@@ -484,6 +504,10 @@ impl<'a> Walker<'a> {
             .or_else(|| if inline { dict.get(b"BPC") } else { None })
             .and_then(Object::as_int)
             .unwrap_or(if is_mask { 1 } else { 0 });
+        let tac = match obj {
+            Some(r) if cmyk && bits == 8 && missing.is_none() => self.image_tac(r, dict, wpx, hpx),
+            _ => None,
+        };
         self.report.images.push(ImageUse {
             page: self.page,
             width_px: wpx,
@@ -494,7 +518,50 @@ impl<'a> Walker<'a> {
             bits,
             soft_mask,
             missing,
+            tac,
         });
+    }
+
+    /// Decode an 8-bit CMYK image as the renderer does and measure its ink total.
+    fn image_tac(&mut self, r: ObjRef, dict: &Dict, w: i64, h: i64) -> Option<ImageTac> {
+        if let Some(t) = self.tacs.get(&r) {
+            return *t;
+        }
+        let t = self.measure_tac(r, dict, w, h);
+        self.tacs.insert(r, t);
+        t
+    }
+
+    fn measure_tac(&mut self, r: ObjRef, dict: &Dict, w: i64, h: i64) -> Option<ImageTac> {
+        use hayro::hayro_interpret::hayro_syntax::object::{ObjectIdentifier, Stream as HStream};
+        let pixels = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?;
+        let want = pixels.checked_mul(4)?;
+        if pixels == 0 || want > MAX_IMAGE_BYTES {
+            return None;
+        }
+        let doc = self.doc;
+        let pdf =
+            self.pixels.get_or_insert_with(|| hayro::hayro_interpret::hayro_syntax::Pdf::new_with_password(doc.bytes().clone(), "").ok()).as_ref()?;
+        let id = ObjectIdentifier::new(i32::try_from(r.num).ok()?, i32::from(r.generation));
+        let stream: HStream<'_> = pdf.xref().get(id)?;
+        let data = stream.decoded_within(want).ok()?;
+        let data = data.get(..want)?;
+        // A Decode array of [1 0 1 0 1 0 1 0] reads every channel inverted.
+        let inverted = dict
+            .get(b"Decode")
+            .map(|d| doc.resolve(d))
+            .and_then(|d| d.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<_>>()))
+            .is_some_and(|d| d.len() == 8 && d.chunks(2).all(|p| p.first() == Some(&1.0) && p.get(1) == Some(&0.0)));
+        let limit = self.th.max_tac;
+        let (mut max, mut over) = (0u32, 0usize);
+        for px in data.chunks_exact(4) {
+            let sum: u32 = px.iter().map(|v| u32::from(if inverted { 255 - v } else { *v })).sum();
+            max = max.max(sum);
+            if f64::from(sum) * 100.0 / 255.0 > limit + 0.5 {
+                over += 1;
+            }
+        }
+        Some(ImageTac { max: f64::from(max) * 100.0 / 255.0, over: over as f64 / pixels as f64 })
     }
 
     fn set_colour(&mut self, st: &mut State, fill: bool, ops: &[Object], res: &Dict) {
@@ -603,7 +670,7 @@ impl<'a> Walker<'a> {
                 }
                 b"BI" => {
                     if let Some((dict, _)) = &op.inline {
-                        self.image(dict, true, &st.ctm, &st.fill.clone(), res, None);
+                        self.image(dict, true, &st.ctm, &st.fill.clone(), res, (None, None));
                     }
                 }
                 b"Do" => {
@@ -662,7 +729,7 @@ impl<'a> Walker<'a> {
                 } else {
                     None
                 };
-                self.image(&s.dict, false, &st.ctm, &st.fill, res, missing);
+                self.image(&s.dict, false, &st.ctm, &st.fill, res, (missing, target));
             }
             Some(b"Form") => {
                 if depth >= MAX_DEPTH || target.is_some_and(|r| seen.contains(&r)) {
@@ -710,6 +777,7 @@ impl<'a> Walker<'a> {
             bits: 0,
             soft_mask: false,
             missing: Some(why),
+            tac: None,
         });
     }
 }
@@ -747,7 +815,17 @@ pub fn analyze(doc: &Document) -> Report {
 
 /// [`analyze`] with the hairline and small-text limits of `th`.
 pub fn analyze_with(doc: &Document, th: &Thresholds) -> Report {
-    let mut w = Walker { doc, report: Report::default(), spots: BTreeMap::new(), fonts: BTreeMap::new(), page: 0, ops: 0, th: th.clone() };
+    let mut w = Walker {
+        doc,
+        report: Report::default(),
+        spots: BTreeMap::new(),
+        fonts: BTreeMap::new(),
+        page: 0,
+        ops: 0,
+        th: th.clone(),
+        pixels: None,
+        tacs: HashMap::new(),
+    };
     let pages = pdfcraft_model::pages(doc);
     for (i, page) in pages.iter().enumerate() {
         let (dw, dh) = page.display_size(doc);
@@ -838,6 +916,49 @@ pub fn is_finishing_layer(name: &str) -> bool {
     ["cut", "dieline", "die line", "kisscut", "kiss cut", "foil", "varnish", "spot uv", "white", "emboss", "crease", "perfor"]
         .iter()
         .any(|k| n.contains(k))
+}
+
+/// Ink total: vector colours, and the pixels of 8-bit CMYK images.
+fn tac_check(r: &Report, th: &Thresholds) -> (Status, String) {
+    let max_tac = r.pages.iter().map(|p| p.max_tac).fold(0.0_f64, f64::max);
+    let vec_pages: Vec<usize> = r.pages.iter().filter(|p| p.max_tac > th.max_tac + 0.5).map(|p| p.number).collect();
+    // An image counts when more than 0.1 % of its pixels go over: a few dark JPEG pixels do not.
+    let measured: Vec<&ImageUse> = r.images.iter().filter(|i| i.tac.is_some()).collect();
+    let heavy: Vec<&ImageUse> = measured.iter().copied().filter(|i| i.tac.is_some_and(|t| t.over > 0.001)).collect();
+    let img_max = measured.iter().filter_map(|i| i.tac.map(|t| t.max)).fold(0.0_f64, f64::max);
+    let mut img_pages: Vec<usize> = heavy.iter().map(|i| i.page).collect();
+    img_pages.sort_unstable();
+    img_pages.dedup();
+    let unmeasured = r.images.iter().filter(|i| i.tac.is_none() && i.missing.is_none() && i.colour.starts_with("CMYK")).count();
+    let tail = if unmeasured > 0 { format!(" {unmeasured} gambar CMYK tidak terukur (bukan 8-bit atau terlalu besar).") } else { String::new() };
+    if max_tac <= 0.0 && measured.is_empty() {
+        (Status::Na, format!("Tidak ada warna CMYK untuk dihitung.{tail}"))
+    } else if !vec_pages.is_empty() || !heavy.is_empty() {
+        let mut parts = Vec::new();
+        if !vec_pages.is_empty() {
+            parts.push(format!("warna vektor {:.0}% di {}", max_tac, pages_text(&vec_pages)));
+        }
+        if !heavy.is_empty() {
+            let share = heavy.iter().filter_map(|i| i.tac.map(|t| t.over)).fold(0.0_f64, f64::max);
+            parts.push(format!(
+                "{} gambar sampai {:.0}% ({:.1}% piksel di atas batas) di {}",
+                heavy.len(),
+                img_max,
+                share * 100.0,
+                pages_text(&img_pages)
+            ));
+        }
+        (Status::Warn, format!("Total tinta di atas {:.0}%: {}.{tail}", th.max_tac, parts.join("; ")))
+    } else {
+        let mut parts = Vec::new();
+        if max_tac > 0.0 {
+            parts.push(format!("vektor {:.0}%", max_tac));
+        }
+        if !measured.is_empty() {
+            parts.push(format!("{} gambar CMYK, tertinggi {:.0}%", measured.len(), img_max));
+        }
+        (Status::Pass, format!("Total tinta tertinggi: {}.{tail}", parts.join(", ")))
+    }
 }
 
 /// Pass / warning / fail lines for `r`, in Indonesian, judged with `th`.
@@ -947,31 +1068,8 @@ pub fn checks(r: &Report, th: &Thresholds) -> Vec<Check> {
     let c = colour_check(r);
     push(c.id, c.title, c.status, c.message);
 
-    // Ink total (vector colours only).
-    let max_tac = r.pages.iter().map(|p| p.max_tac).fold(0.0_f64, f64::max);
-    if max_tac <= 0.0 {
-        push(
-            "ink_coverage",
-            "Total tinta (TAC)",
-            Status::Na,
-            "Tidak ada warna CMYK vektor untuk dihitung (TAC di dalam gambar tidak diukur).".into(),
-        );
-    } else if max_tac > th.max_tac + 0.5 {
-        let p: Vec<usize> = r.pages.iter().filter(|p| p.max_tac > th.max_tac + 0.5).map(|p| p.number).collect();
-        push(
-            "ink_coverage",
-            "Total tinta (TAC)",
-            Status::Warn,
-            format!("Warna vektor dengan total tinta {:.0}% (>{:.0}%) di {}. TAC di dalam gambar tidak diukur.", max_tac, th.max_tac, pages_text(&p)),
-        );
-    } else {
-        push(
-            "ink_coverage",
-            "Total tinta (TAC)",
-            Status::Pass,
-            format!("Total tinta warna vektor tertinggi {:.0}%. TAC di dalam gambar tidak diukur.", max_tac),
-        );
-    }
+    let (status, message) = tac_check(r, th);
+    push("ink_coverage", "Total tinta (TAC)", status, message);
 
     // Small rich black text.
     let rich: Vec<usize> = r.pages.iter().filter(|p| p.rich_black_small_text > 0).map(|p| p.number).collect();
