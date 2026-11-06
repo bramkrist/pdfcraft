@@ -222,3 +222,19 @@ fn a_cmyk_image_under_the_limit_passes() {
     let tac = check(&c, "ink_coverage");
     assert_eq!(tac.status, Status::Pass, "{tac:?}");
 }
+
+#[test]
+fn ink_total_of_a_cmyk_jpeg_is_measured_as_the_renderer_decodes_it() {
+    // A synthetic 8 x 8 Adobe CMYK JPEG at 90 % on every channel, stored inverted as Adobe apps
+    // write it, so the image dictionary carries an inverted Decode array (as Photoshop PDFs do).
+    let res = "<< /XObject << /Im 3 0 R >> >>";
+    let hex = "FFD8FFEE000E41646F626500640000000000FFDB00430001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101FFC000140800080008044311004D11005911004B1100FFC4001F0000010501010101010100000000000000000102030405060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FAFFDA000E0443004D0059004B00003F00FE31EBF8C7AFE31EBF8C7AFFD9>";
+    let img = format!(
+        "<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Decode [1.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0] /Filter [/ASCIIHexDecode /DCTDecode] /Length {} >>\nstream\n{hex}\nendstream",
+        hex.len()
+    );
+    let doc = open(build(&[(res, "q 100 0 0 100 0 0 cm /Im Do Q", "")], &[&img], ""));
+    let r = analyze(&doc);
+    let tac = r.images.first().and_then(|i| i.tac).expect("measured");
+    assert!((tac.max - 360.0).abs() < 4.0 && tac.over > 0.99, "{tac:?}");
+}

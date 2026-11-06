@@ -533,6 +533,7 @@ impl<'a> Walker<'a> {
     }
 
     fn measure_tac(&mut self, r: ObjRef, dict: &Dict, w: i64, h: i64) -> Option<ImageTac> {
+        use hayro::hayro_interpret::hayro_syntax::object::stream::ImageDecodeParams;
         use hayro::hayro_interpret::hayro_syntax::object::{ObjectIdentifier, Stream as HStream};
         let pixels = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?;
         let want = pixels.checked_mul(4)?;
@@ -544,8 +545,16 @@ impl<'a> Walker<'a> {
             self.pixels.get_or_insert_with(|| hayro::hayro_interpret::hayro_syntax::Pdf::new_with_password(doc.bytes().clone(), "").ok()).as_ref()?;
         let id = ObjectIdentifier::new(i32::try_from(r.num).ok()?, i32::from(r.generation));
         let stream: HStream<'_> = pdf.xref().get(id)?;
-        let data = stream.decoded_within(want).ok()?;
-        let data = data.get(..want)?;
+        // The image codecs need the dictionary's size, as the renderer passes it.
+        let params = ImageDecodeParams {
+            bpc: Some(8),
+            num_components: Some(4),
+            width: u32::try_from(w).ok()?,
+            height: u32::try_from(h).ok()?,
+            ..ImageDecodeParams::default()
+        };
+        let decoded = stream.decoded_image(&params).ok()?;
+        let data = decoded.data.get(..want)?;
         // A Decode array of [1 0 1 0 1 0 1 0] reads every channel inverted.
         let inverted = dict
             .get(b"Decode")
