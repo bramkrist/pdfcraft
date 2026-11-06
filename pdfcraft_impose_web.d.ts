@@ -13,6 +13,12 @@ export class Converted {
 }
 
 /**
+ * `assemblePages(pdfBytes, extrasBytes, extraLengths, planJson)`: the page editor's new
+ * document. `extrasBytes` holds the other files one after another, `extraLengths` their sizes.
+ */
+export function assemblePages(pdf: Uint8Array, extras: Uint8Array, extra_lengths: Uint32Array, plan_json: string): Uint8Array;
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  */
 export function impose(pdf: Uint8Array, job_json: string): Uint8Array;
@@ -57,6 +63,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_converted_free: (a: number, b: number) => void;
+    readonly assemblePages: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly converted_bytes: (a: number) => [number, number];
     readonly converted_report: (a: number) => [number, number];
     readonly impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -70,10 +77,10 @@ export interface InitOutput {
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
