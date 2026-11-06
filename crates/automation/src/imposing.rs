@@ -1,7 +1,7 @@
 //! `doc_impose` (step & repeat, gang n-up) and `doc_booklet` (saddle, perfect-bound and continuous
-//! booklets) onto press sheets.
+//! booklets) onto press sheets, and `doc_bleed` (generated bleed).
 
-use pdfcraft_engine::impose::{self, Align, Binding, Booklet, Duplex, Fill, LastSignature, Margins, Marks, StepRepeat};
+use pdfcraft_engine::impose::{self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Margins, Marks, StepRepeat};
 use pdfcraft_engine::print::Content;
 use serde_json::{Value, json};
 
@@ -154,5 +154,29 @@ impl Automation {
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
         Ok(json!({ "pages": sizes.len(), "sides": sides.len(), "bytes": bytes.len(), "path": path.to_string_lossy() }))
+    }
+
+    /// `doc_bleed`: add bleed around every page and save the print-ready PDF.
+    pub(crate) fn doc_bleed(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        let all = mm(a, "bleed_mm")?;
+        let side = |key: &str| -> Result<f64> { Ok(mm(a, key)?.or(all).unwrap_or(0.0)) };
+        let spec = AddBleed {
+            amount: [side("left_mm")?, side("bottom_mm")?, side("right_mm")?, side("top_mm")?],
+            method: match a.opt_str("method")?.unwrap_or("mirror") {
+                "mirror" => BleedMethod::Mirror,
+                "scale" => BleedMethod::Scale,
+                m => return Err(bad(format!("unknown method {m:?}"))),
+            },
+        };
+        let content = content_arg(a)?;
+        let sheets = impose::add_bleed(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
+        let bytes = self.session.bleed_pdf(id, &spec, content).map_err(failed)?;
+        let path = self.resolve(a.str("path")?, true)?;
+        write_atomic(&path, &bytes)?;
+        let first = sheets.first().map(|s| s.size).unwrap_or_default();
+        Ok(json!({ "pages": sheets.len(), "first_page_mm": [first.0 / MM, first.1 / MM], "bytes": bytes.len(), "path": path.to_string_lossy() }))
     }
 }

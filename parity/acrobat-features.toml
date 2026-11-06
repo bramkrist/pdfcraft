@@ -8215,6 +8215,18 @@ evidence = ["crates/impose/src/booklet_tests.rs::saddle_stitch_of_eight_pages_pa
 notes = "Two pages per sheet side in fold order, written through pdfcraft-print's sheet writer so vector pages are never rasterised. Saddle (padded to a multiple of 4 with blanks at the end), perfect-bound signatures (last signature padded to full or to a multiple of 4), continuous; automatic or chosen sheet, one uniform scale from the largest page (or 100 % with a refusal when it does not fit), centre or spine alignment, edge space, right-to-left binding. Output is front/back sheet sides in order for duplex printing; checked by arithmetic properties over 4..64 pages and by rendering a four-page saddle booklet. Not yet: creep, cut stacks, separate front and back files / flipped backs, crop marks, bleed generation, a dialog and command (headless tool only), page numbers and covers."
 
 [[feature]]
+id = "print.generate-bleed"
+title = "Generate bleed around pages (mirrored or scaled)"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = ["doc_bleed"]
+evidence = ["crates/impose/src/bleed_tests.rs::the_parts_tile_the_sheet_for_any_mix_of_sides", "crates/impose/src/bleed_tests.rs::a_scaled_bleed_enlarges_the_page_about_its_centre_to_cover_the_new_edge", "crates/impose/tests/pdf.rs::a_mirrored_bleed_continues_the_artwork_as_its_own_reflection_and_sets_the_trim_box", "crates/automation/tests/it/automation.rs::adding_bleed_through_tools"]
+notes = "Pages grow by a uniform or per-side bleed and get a TrimBox at the old edge and a BleedBox around the new page. Mirror reflects each edge strip outward (corners across both edges); scale enlarges the page about its centre. Both are placements of the original page form written through pdfcraft-print's sheet writer, so images, fonts and colour spaces are not rewritten or rasterised; the mirrored strips are checked to tile the new page exactly and by rendering. Not yet: a dialog and command (headless tool only), taking an existing TrimBox as the edge, extending edge colours, removing or cropping an existing bleed, per-page amounts, and honouring a page rotation that differs between pages."
+
+[[feature]]
 id = "print.page-range"
 title = "Print all, current page or a range (labels allowed)"
 area = "L"

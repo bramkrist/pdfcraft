@@ -177,7 +177,7 @@ pub fn booklet(sizes: &[(f64, f64)], spec: &Booklet) -> Result<Vec<Sheet>, Impos
             let mut placed = Vec::with_capacity(2);
             placed.extend(left.map(|p| place(p, false)));
             placed.extend(right.map(|p| place(p, true)));
-            Sheet { size: sheet, placed, borders: Vec::new(), lines: Vec::new() }
+            Sheet { size: sheet, placed, ..Sheet::default() }
         })
         .collect())
 }

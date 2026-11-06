@@ -103,6 +103,9 @@ pub struct Sheet {
     /// Page borders (Multiple) and cut marks (Poster), in sheet space: rectangles and lines.
     pub borders: Vec<[f64; 4]>,
     pub lines: Vec<[f64; 4]>,
+    /// The finished (trimmed) area in sheet space, written as the page's `TrimBox` with the whole
+    /// sheet as its `BleedBox`; `None` writes neither.
+    pub trim: Option<[f64; 4]>,
 }
 
 fn oriented(paper: (f64, f64), o: Orientation, landscape_wanted: bool) -> (f64, f64) {

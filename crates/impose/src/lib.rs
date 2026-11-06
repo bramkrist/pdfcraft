@@ -12,6 +12,7 @@
 //!   front, so a front cell and its back cell sit exactly behind each other once the sheet is
 //!   turned over the long or the short edge.
 //! - **Trim marks**: corner marks around every trimmed page, placed outside the bleed.
+//! - **Bleed** ([`add_bleed`]): mirrored or scaled margin around every page, with a `TrimBox`.
 //! - **Booklets** ([`booklet()`]): saddle-stitched, perfect-bound (signatures) and continuous page
 //!   order, two pages to a sheet side.
 //!
@@ -19,8 +20,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bleed;
 mod booklet;
 
+pub use bleed::{AddBleed, BleedMethod, add_bleed};
 pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
 
 use pdfcraft_content::Matrix;
@@ -410,6 +413,15 @@ pub fn booklet_document(src: &Document, spec: &Booklet, content: Content) -> Res
     Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
 }
 
+/// Add bleed to every page of `src` by `spec` and write the pages (each with a `TrimBox` at the
+/// old edge) as a PDF (see [`impose_document`] for annotations and encryption).
+pub fn bleed_document(src: &Document, spec: &AddBleed, content: Content) -> Result<Vec<u8>, DocumentError> {
+    let sheets = add_bleed(&pdfcraft_print::page_sizes(src), spec)?;
+    Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
+}
+
+#[cfg(test)]
+mod bleed_tests;
 #[cfg(test)]
 mod booklet_tests;
 #[cfg(test)]

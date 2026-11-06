@@ -142,3 +142,37 @@ fn a_saddle_stitched_booklet_puts_each_page_where_the_fold_needs_it() {
     assert_eq!((rgb(&front, 50, 30), rgb(&front, 150, 30)), ([0, 0, 0], RED));
     assert_eq!((rgb(&back, 50, 30), rgb(&back, 150, 30)), (GREEN, BLUE));
 }
+
+/// The first page's entry `key`, as text for comparison.
+fn first_page_entry(bytes: &[u8], key: &[u8]) -> Option<String> {
+    let doc = Document::open(Arc::new(bytes.to_vec())).expect("open output");
+    let root = doc.resolve(doc.trailer().get(b"Root")?).as_dict()?.clone();
+    let pages = doc.resolve(root.get(b"Pages")?).as_dict()?.clone();
+    let kids = doc.resolve(pages.get(b"Kids")?).as_array()?.to_vec();
+    let page = doc.resolve(kids.first()?).as_dict()?.clone();
+    Some(format!("{:?}", doc.resolve(page.get(key)?)))
+}
+
+#[test]
+fn a_mirrored_bleed_continues_the_artwork_as_its_own_reflection_and_sets_the_trim_box() {
+    const GREEN: [u8; 3] = [0, 255, 0];
+    // Left edge: red for the first 5 pt, then green for 5 more; the rest is white.
+    let src = pdf(&[(100, 60, "1 0 0 rg 0 0 5 60 re f 0 1 0 rg 5 0 5 60 re f")]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let spec = pdfcraft_impose::AddBleed::uniform(10.0, pdfcraft_impose::BleedMethod::Mirror);
+    let out = pdfcraft_impose::bleed_document(&doc, &spec, Content::Document).expect("bleed");
+    let page = render(&out, 0);
+    assert_eq!((page.width, page.height), (120, 80));
+    // Sheet x 10..15 is the page's red, 15..20 its green; the bleed reflects them across the edge.
+    for (x, want) in [(2, GREEN), (7, RED), (12, RED), (17, GREEN), (60, WHITE), (115, WHITE)] {
+        assert_eq!(rgb(&page, x, 40), want, "x = {x}");
+    }
+    // The corners reflect across both edges and the strips above and below carry the same colours.
+    assert_eq!(rgb(&page, 2, 2), GREEN);
+    assert_eq!(rgb(&page, 12, 78), RED);
+    // TrimBox at the old edge, BleedBox the whole page.
+    // Whole numbers are written as integers.
+    let boxed = |v: [i64; 4]| format!("{:?}", pdfcraft_cos::Object::Array(v.iter().map(|x| pdfcraft_cos::Object::Int(*x)).collect()));
+    assert_eq!(first_page_entry(&out, b"TrimBox"), Some(boxed([10, 10, 110, 70])));
+    assert_eq!(first_page_entry(&out, b"BleedBox"), Some(boxed([0, 0, 120, 80])));
+}

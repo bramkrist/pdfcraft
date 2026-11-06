@@ -5241,6 +5241,32 @@ fn making_a_booklet_through_tools() {
 }
 
 #[test]
+fn adding_bleed_through_tools() {
+    let dir = workdir("bleed");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let n = info["document"]["pages"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_bleed", json!({ "doc": doc, "bleed_mm": 3, "path": "bleed.pdf" }));
+    assert_eq!(r["pages"].as_u64(), Some(n));
+    let out = ok(&mut a, "doc_open", json!({ "path": "bleed.pdf" }))["doc"].as_u64().unwrap();
+    let grown = ok(&mut a, "doc_info", json!({ "doc": out }));
+    assert_eq!(grown["document"]["pages"].as_u64(), Some(n));
+    ok(&mut a, "doc_bleed", json!({ "doc": doc, "bleed_mm": 3, "right_mm": 0, "method": "scale", "path": "scaled.pdf" }));
+    for bad in [
+        json!({ "doc": doc }),
+        json!({ "doc": doc, "path": "x.pdf" }),
+        json!({ "doc": doc, "bleed_mm": 0, "path": "x.pdf" }),
+        json!({ "doc": doc, "bleed_mm": -1, "path": "x.pdf" }),
+        json!({ "doc": doc, "bleed_mm": 3, "method": "smear", "path": "x.pdf" }),
+        json!({ "doc": doc, "bleed_mm": 5000, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_bleed", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();

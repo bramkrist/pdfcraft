@@ -337,6 +337,11 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages_root));
         p.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, sheet.size.0, sheet.size.1].iter().map(|v| Object::Real(*v)).collect()));
+        if let Some(t) = sheet.trim {
+            let rect = |r: [f64; 4]| Object::Array(r.iter().map(|v| Object::Real(*v)).collect());
+            p.set(b"TrimBox".to_vec(), rect(t));
+            p.set(b"BleedBox".to_vec(), rect([0.0, 0.0, sheet.size.0, sheet.size.1]));
+        }
         p.set(b"Resources".to_vec(), Object::Dict(res));
         p.set(b"Contents".to_vec(), Object::Ref(contents));
         kids.push(Object::Ref(doc.add(Object::Dict(p))));

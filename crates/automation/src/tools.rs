@@ -773,6 +773,25 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "path"],
         )),
+        t(
+            "doc_bleed",
+            "Add bleed",
+            "Add bleed around every page and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). The page's current edge is taken as the trim: each page grows by bleed_mm on every side (or left_mm, bottom_mm, right_mm, top_mm for single sides; a side-specific value wins) and gets a TrimBox at the old edge and a BleedBox around the whole new page. method mirror (default): each edge strip is reflected outward across the edge and the corners across both, so the artwork continues as its own mirror image; the bleed must be smaller than the page. scale: the page is enlarged about its centre until it covers page plus bleed, so the trim then crops slightly into the artwork. Not yet: taking an existing TrimBox as the edge, extending edge colours, removing or cropping a bleed.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "bleed_mm": { "type": "number", "minimum": 0 },
+                "left_mm": { "type": "number", "minimum": 0 },
+                "bottom_mm": { "type": "number", "minimum": 0 },
+                "right_mm": { "type": "number", "minimum": 0 },
+                "top_mm": { "type": "number", "minimum": 0 },
+                "method": { "type": "string", "enum": ["mirror", "scale"] },
+                "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
+            }),
+            &["doc", "path"],
+        )),
         t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
