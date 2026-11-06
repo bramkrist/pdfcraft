@@ -53,6 +53,10 @@ pub struct Job {
     pub duplex: Option<String>,
     /// Cut & stack: times the block of different stacks repeats across a row.
     pub copies: Option<usize>,
+    /// Step & repeat: turn whole rows a quarter turn where that fits more copies.
+    pub rotate: Option<bool>,
+    /// `best`: try the sheet both ways round and keep the one with more copies per sheet.
+    pub sheet_orientation: Option<String>,
     /// Booklet: `saddle` (default), `perfect` or `continuous`.
     pub binding: Option<String>,
     pub signature: Option<usize>,
@@ -118,6 +122,8 @@ pub struct Cell {
     pub rect_mm: [f64; 4],
     /// The page is reflected left-right or top-bottom (generated bleed strips).
     pub mirrored: bool,
+    /// Quarter turn of the page in degrees: 90 anticlockwise, -90 clockwise, 0 upright.
+    pub turn: i32,
 }
 
 /// One sheet side.
@@ -173,6 +179,7 @@ fn step_repeat(job: &Job, fill: Fill) -> Result<StepRepeat, String> {
         Some("short-edge") => Some(Duplex::ShortEdge),
         Some(d) => return Err(bad(format!("unknown duplex {d:?}"))),
     };
+    s.rotate = job.rotate.unwrap_or(false);
     s.marks = match &job.marks {
         None | Some(MarksMm::On(false)) => None,
         Some(MarksMm::On(true)) => Some(Marks::default()),
@@ -233,8 +240,25 @@ fn add_bleed(job: &Job) -> Result<AddBleed, String> {
     })
 }
 
-/// The sheets `job` makes of pages of these sizes (points).
+/// The sheets `job` makes of pages of these sizes (points). With `sheet_orientation: "best"`,
+/// the sheet is also tried the other way round and the layout with more copies on its first
+/// sheet wins (the first way on a tie).
 fn sheets(sizes: &[(f64, f64)], job: &Job) -> Result<Vec<Sheet>, String> {
+    match job.sheet_orientation.as_deref() {
+        None | Some("as-given") => sheets_as_given(sizes, job),
+        Some("best") => {
+            let first = sheets_as_given(sizes, job);
+            let mut turned = job.clone();
+            turned.sheet_mm = job.sheet_mm.map(|[w, h]| [h, w]);
+            let second = sheets_as_given(sizes, &turned);
+            let ups = |r: &Result<Vec<Sheet>, String>| r.as_ref().ok().and_then(|s| s.first()).map_or(0, |s| s.placed.len());
+            if ups(&second) > ups(&first) { second } else { first }
+        }
+        Some(o) => Err(bad(format!("unknown sheet_orientation {o:?}"))),
+    }
+}
+
+fn sheets_as_given(sizes: &[(f64, f64)], job: &Job) -> Result<Vec<Sheet>, String> {
     let r = match job.mode.as_str() {
         "repeat" | "" => pdfcraft_impose::step_and_repeat(sizes, &step_repeat(job, Fill::Repeat)?),
         "sequential" => pdfcraft_impose::step_and_repeat(sizes, &step_repeat(job, Fill::Sequential)?),
@@ -255,10 +279,25 @@ fn describe(sheets: &[Sheet]) -> Layout {
                 .placed
                 .iter()
                 .map(|p| {
-                    let [a, _, _, d, e, f] = p.matrix.0;
-                    let (x0, x1) = (a * p.clip[0] + e, a * p.clip[2] + e);
-                    let (y0, y1) = (d * p.clip[1] + f, d * p.clip[3] + f);
-                    Cell { page: p.page, rect_mm: [mm(x0.min(x1)), mm(y0.min(y1)), mm(x0.max(x1)), mm(y0.max(y1))], mirrored: a < 0.0 || d < 0.0 }
+                    let [a, b, c, d, e, f] = p.matrix.0;
+                    let [u0, v0, u1, v1] = p.clip;
+                    let pts = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)].map(|(u, v)| (a * u + c * v + e, b * u + d * v + f));
+                    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                    for (x, y) in pts {
+                        x0 = x0.min(x);
+                        y0 = y0.min(y);
+                        x1 = x1.max(x);
+                        y1 = y1.max(y);
+                    }
+                    // Quarter turns: 90 anticlockwise, -90 clockwise, 0 upright.
+                    let turn = if b > 0.5 {
+                        90
+                    } else if b < -0.5 {
+                        -90
+                    } else {
+                        0
+                    };
+                    Cell { page: p.page, rect_mm: [mm(x0), mm(y0), mm(x1), mm(y1)], mirrored: turn == 0 && (a < 0.0 || d < 0.0), turn }
                 })
                 .collect(),
             marks_mm: s.lines.iter().map(|l| [mm(l[0]), mm(l[1]), mm(l[2]), mm(l[3])]).collect(),

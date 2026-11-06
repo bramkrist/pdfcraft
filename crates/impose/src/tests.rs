@@ -420,3 +420,71 @@ fn duplex_cut_stack_keeps_each_back_behind_its_front() {
         }
     }
 }
+
+#[test]
+fn rotation_fits_more_copies_like_the_press_room_example() {
+    // 5 x 2 in pages on a 9 x 14 in sheet, no margins: 8 without turning (wide), more with.
+    let inch = 72.0;
+    let mut s = StepRepeat::new((9.0 * inch, 14.0 * inch));
+    s.margins = Margins::default();
+    let plain = step_and_repeat(&[(5.0 * inch, 2.0 * inch)], &s).expect("layout");
+    assert_eq!(plain[0].placed.len(), 7, "tall pages, upright: 1 column x 7 rows");
+    s.rotate = true;
+    let turned = step_and_repeat(&[(5.0 * inch, 2.0 * inch)], &s).expect("layout");
+    assert!(turned[0].placed.len() >= 10, "{}", turned[0].placed.len());
+    // Nothing overlaps and everything stays on the sheet.
+    let rects: Vec<Rect> = turned[0]
+        .placed
+        .iter()
+        .map(|p| {
+            let [a, b, c, d, e, f] = p.matrix.0;
+            let pts =
+                [(0.0, 0.0), (5.0 * inch, 0.0), (0.0, 2.0 * inch), (5.0 * inch, 2.0 * inch)].map(|(u, v)| (a * u + c * v + e, b * u + d * v + f));
+            let xs = pts.map(|p| p.0);
+            let ys = pts.map(|p| p.1);
+            [
+                xs.iter().cloned().fold(f64::MAX, f64::min),
+                ys.iter().cloned().fold(f64::MAX, f64::min),
+                xs.iter().cloned().fold(f64::MIN, f64::max),
+                ys.iter().cloned().fold(f64::MIN, f64::max),
+            ]
+        })
+        .collect();
+    for (i, r) in rects.iter().enumerate() {
+        assert!(r[0] >= -EPS && r[1] >= -EPS && r[2] <= 9.0 * inch + EPS && r[3] <= 14.0 * inch + EPS, "{r:?}");
+        for q in rects.iter().skip(i + 1) {
+            assert!(!overlaps(*r, *q), "{r:?} {q:?}");
+        }
+    }
+}
+
+#[test]
+fn a_turned_front_has_its_back_turned_to_match() {
+    let inch = 72.0;
+    let mut s = StepRepeat::new((9.0 * inch, 14.0 * inch));
+    s.margins = Margins::default();
+    s.rotate = true;
+    s.duplex = Some(Duplex::LongEdge);
+    let sheets = step_and_repeat(&[(5.0 * inch, 2.0 * inch); 2], &s).expect("layout");
+    let (front, back) = (&sheets[0], &sheets[1]);
+    assert_eq!(front.placed.len(), back.placed.len());
+    for (f, b) in front.placed.iter().zip(&back.placed) {
+        // Over the long edge a page turned anticlockwise backs onto one turned clockwise.
+        if f.matrix.0[1] > 0.5 {
+            assert!(b.matrix.0[1] < -0.5, "{:?} / {:?}", f.matrix, b.matrix);
+        }
+    }
+}
+
+#[test]
+fn rotation_is_off_by_default_and_ignored_for_a_fixed_grid() {
+    let inch = 72.0;
+    let mut s = StepRepeat::new((9.0 * inch, 14.0 * inch));
+    s.margins = Margins::default();
+    s.rotate = true;
+    s.cols = Some(1);
+    s.rows = Some(2);
+    let sheets = step_and_repeat(&[(5.0 * inch, 2.0 * inch)], &s).expect("layout");
+    assert_eq!(sheets[0].placed.len(), 2);
+    assert!(sheets[0].placed.iter().all(|p| p.matrix.0[1] == 0.0));
+}

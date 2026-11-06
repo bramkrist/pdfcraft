@@ -106,3 +106,16 @@ fn custom_marks_can_run_into_the_page_in_registration_colour() {
     let text = String::from_utf8_lossy(&out).to_string();
     let _ = text;
 }
+
+#[test]
+fn best_orientation_and_rotation_fit_more() {
+    let plain = layout(&[[127.0, 50.8]], &job(r#"{"mode":"repeat","sheet_mm":[228.6,355.6],"margin_mm":0}"#)).expect("plain");
+    let best = layout(&[[127.0, 50.8]], &job(r#"{"mode":"repeat","sheet_mm":[228.6,355.6],"margin_mm":0,"sheet_orientation":"best","rotate":true}"#))
+        .expect("best");
+    assert_eq!(plain.up_per_sheet, 7);
+    assert!(best.up_per_sheet >= 10, "{}", best.up_per_sheet);
+    // Turned cells report their turned footprint: 50.8 wide, 127 tall.
+    let t = best.sheets[0].cells.iter().find(|c| c.turn != 0).expect("a turned cell");
+    assert!(((t.rect_mm[2] - t.rect_mm[0]) - 50.8).abs() < 1e-6, "{:?}", t.rect_mm);
+    assert!(layout(&[[10.0, 10.0]], &job(r#"{"mode":"repeat","sheet_mm":[100,100],"sheet_orientation":"sideways"}"#)).is_err());
+}

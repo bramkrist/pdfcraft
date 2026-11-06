@@ -194,3 +194,18 @@ fn registration_marks_render_black_and_ink_every_plate() {
     let name = |n: &str| format!("Name({:?})", n.as_bytes());
     assert!(page.contains(&name("Separation")) && page.contains(&name("All")), "{page}");
 }
+
+#[test]
+fn a_turned_page_renders_turned_not_clipped() {
+    // 100 x 40 pt page: red left half, blue right half. On a 60 x 100 sheet it fits only turned.
+    let src = pdf(&[(100, 40, "1 0 0 rg 0 0 50 40 re f 0 0 1 rg 50 0 50 40 re f")]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let mut spec = StepRepeat::new((40.0, 100.0));
+    spec.rotate = true;
+    let out = impose_document(&doc, &spec, Content::Document).expect("impose");
+    let sheet = render(&out, 0);
+    assert_eq!((sheet.width, sheet.height), (40, 100));
+    // Turned anticlockwise: the page's left (red) is now at the bottom, its right (blue) on top.
+    assert_eq!(rgb(&sheet, 20, 80), RED, "bottom of the sheet");
+    assert_eq!(rgb(&sheet, 20, 20), BLUE, "top of the sheet");
+}

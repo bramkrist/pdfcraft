@@ -101,6 +101,7 @@ impl Automation {
             "short-edge" => Some(Duplex::ShortEdge),
             d => return Err(bad(format!("unknown duplex {d:?}"))),
         };
+        spec.rotate = a.opt_bool("rotate")?.unwrap_or(false);
         if a.opt_bool("marks")?.unwrap_or(false) {
             let default = Marks::default();
             spec.marks = Some(Marks {

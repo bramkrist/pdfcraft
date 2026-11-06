@@ -158,6 +158,10 @@ pub struct StepRepeat {
     pub duplex: Option<Duplex>,
     /// Trim marks; `None` draws none.
     pub marks: Option<Marks>,
+    /// Step & repeat only, with automatic columns, rows and cell: turn whole rows of pages a
+    /// quarter turn where that fits more copies (as press-room step & repeat does). Rows run
+    /// from the top; each row is centred.
+    pub rotate: bool,
 }
 
 impl StepRepeat {
@@ -174,6 +178,7 @@ impl StepRepeat {
             bleed: 0.0,
             duplex: None,
             marks: None,
+            rotate: false,
         }
     }
 }
@@ -297,17 +302,52 @@ fn place_page(page: usize, size: (f64, f64), cell: Rect) -> Option<(Placement, R
 /// What goes into one cell of a sheet: the page and its size.
 type Slot = Option<(usize, (f64, f64))>;
 
+/// A quarter turn of a page in its cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    None,
+    /// Anticlockwise: the head of the page points left.
+    Ccw,
+    /// Clockwise: the head points right.
+    Cw,
+}
+
+/// A page turned a quarter turn, centred in `cell` (which holds its turned footprint).
+fn place_turned(page: usize, size: (f64, f64), cell: Rect, turn: Turn) -> (Placement, Rect) {
+    let (w, h) = size;
+    let ox = cell[0] + ((cell[2] - cell[0]) - h) / 2.0;
+    let oy = cell[1] + ((cell[3] - cell[1]) - w) / 2.0;
+    let m = match turn {
+        Turn::Cw => [0.0, -1.0, 1.0, 0.0, ox, oy + w],
+        _ => [0.0, 1.0, -1.0, 0.0, ox + h, oy],
+    };
+    (Placement { page, matrix: Matrix(m), clip: [0.0, 0.0, w, h] }, [ox, oy, ox + h, oy + w])
+}
+
 /// Build one sheet from `cells` and what each holds.
 fn build_sheet(spec: &StepRepeat, cells: &[Rect], slots: &[Slot]) -> Sheet {
+    build_turned(spec, cells, slots, &[])
+}
+
+/// [`build_sheet`] with a [`Turn`] per cell (missing entries are not turned).
+fn build_turned(spec: &StepRepeat, cells: &[Rect], slots: &[Slot], turns: &[Turn]) -> Sheet {
     let mut sheet = Sheet { size: spec.sheet, ..Sheet::default() };
     let mut trims: Vec<Rect> = Vec::new();
-    for (cell, slot) in cells.iter().zip(slots) {
+    for (k, (cell, slot)) in cells.iter().zip(slots).enumerate() {
         let Some((page, size)) = *slot else { continue };
-        let Some((placement, _)) = place_page(page, size, *cell) else { continue };
-        sheet.placed.push(placement);
-        let ox = placement.matrix.0[4];
-        let oy = placement.matrix.0[5];
-        trims.push([ox + spec.bleed, oy + spec.bleed, ox + size.0 - spec.bleed, oy + size.1 - spec.bleed]);
+        let turn = turns.get(k).copied().unwrap_or(Turn::None);
+        let footprint = if turn == Turn::None {
+            let Some((placement, _)) = place_page(page, size, *cell) else { continue };
+            let (ox, oy) = (placement.matrix.0[4], placement.matrix.0[5]);
+            sheet.placed.push(placement);
+            [ox, oy, ox + size.0, oy + size.1]
+        } else {
+            let (placement, footprint) = place_turned(page, size, *cell, turn);
+            sheet.placed.push(placement);
+            footprint
+        };
+        let b = spec.bleed;
+        trims.push([footprint[0] + b, footprint[1] + b, footprint[2] - b, footprint[3] - b]);
     }
     if let Some(marks) = spec.marks {
         sheet.lines = trim_marks(&trims, spec.sheet, spec.bleed, marks);
@@ -388,20 +428,87 @@ fn repeat_sheets(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sheet>, 
     let mut i = 0usize;
     while i < sizes.len() {
         let Some(&front_size) = sizes.get(i) else { break };
-        let cell = spec.cell.unwrap_or(front_size);
-        let cells = grid(spec, cell)?;
+        let (cells, turns) = if spec.rotate && spec.cols.is_none() && spec.rows.is_none() && spec.cell.is_none() {
+            rotated_rows(spec, front_size)?
+        } else {
+            let cells = grid(spec, spec.cell.unwrap_or(front_size))?;
+            let turns = vec![Turn::None; cells.len()];
+            (cells, turns)
+        };
         let slots: Vec<Slot> = cells.iter().map(|_| Some((i, front_size))).collect();
-        out.push(build_sheet(spec, &cells, &slots));
+        out.push(build_turned(spec, &cells, &slots, &turns));
         if let Some(duplex) = spec.duplex
             && let Some(&back_size) = sizes.get(i + 1)
         {
             let back_cells: Vec<Rect> = cells.iter().map(|c| mirrored(*c, spec.sheet, duplex)).collect();
             let back_slots: Vec<Slot> = back_cells.iter().map(|_| Some((i + 1, back_size))).collect();
-            out.push(build_sheet(spec, &back_cells, &back_slots));
+            // Turned over the long edge, a page whose head pointed left now has it pointing right:
+            // its back turns the other way so heads line up. Over the short edge they stay.
+            let back_turns: Vec<Turn> = turns
+                .iter()
+                .map(|t| match (t, duplex) {
+                    (Turn::Ccw, Duplex::LongEdge) => Turn::Cw,
+                    (Turn::Cw, Duplex::LongEdge) => Turn::Ccw,
+                    (t, _) => *t,
+                })
+                .collect();
+            out.push(build_turned(spec, &back_cells, &back_slots, &back_turns));
         }
         i += step;
     }
     Ok(out)
+}
+
+/// Rows of `size` pages, some rows turned a quarter turn, fitting the most copies in the usable
+/// area: a block of rows one way from the top, then rows the other way in the space left.
+fn rotated_rows(spec: &StepRepeat, size: (f64, f64)) -> Result<(Vec<Rect>, Vec<Turn>), ImposeError> {
+    let m = spec.margins;
+    let area_w = spec.sheet.0 - m.left - m.right;
+    let area_h = spec.sheet.1 - m.top - m.bottom;
+    let (gx, gy) = spec.gutter;
+    let shapes = [(size, Turn::None), ((size.1, size.0), Turn::Ccw)];
+    // (copies, turned copies, first shape, rows of the first shape, rows of the second)
+    let mut best: Option<(usize, usize, usize, usize, usize)> = None;
+    for first in 0..2 {
+        let (a, ta) = shapes[first];
+        let (b, _) = shapes[1 - first];
+        let (ca, cb) = (fit_count(area_w, a.0, gx), fit_count(area_w, b.0, gx));
+        for ra in 0..=fit_count(area_h, a.1, gy) {
+            let used = if ra > 0 { ra as f64 * a.1 + (ra - 1) as f64 * gy + gy } else { 0.0 };
+            let rb = if area_h - used > 0.0 { fit_count(area_h - used, b.1, gy) } else { 0 };
+            let total = ra.saturating_mul(ca).saturating_add(rb.saturating_mul(cb));
+            let turned = if ta == Turn::None { rb.saturating_mul(cb) } else { ra.saturating_mul(ca) };
+            let better = match best {
+                None => total > 0,
+                Some((t, tt, ..)) => total > t || (total == t && turned < tt),
+            };
+            if better {
+                best = Some((total, turned, first, ra, rb));
+            }
+        }
+    }
+    let Some((total, _, first, ra, rb)) = best else {
+        return Err(ImposeError::DoesNotFit { cell_w: size.0, cell_h: size.1, area_w, area_h });
+    };
+    if total > MAX_CELLS_PER_SHEET {
+        return Err(ImposeError::TooLarge("more cells on one sheet than are supported"));
+    }
+    let rows: Vec<((f64, f64), Turn)> = std::iter::repeat_n(shapes[first], ra).chain(std::iter::repeat_n(shapes[1 - first], rb)).collect();
+    let used_h: f64 = rows.iter().map(|(s, _)| s.1).sum::<f64>() + rows.len().saturating_sub(1) as f64 * gy;
+    let mut top = spec.sheet.1 - m.top - (area_h - used_h) / 2.0;
+    let (mut cells, mut turns) = (Vec::with_capacity(total), Vec::with_capacity(total));
+    for (shape, turn) in rows {
+        let n = fit_count(area_w, shape.0, gx);
+        let row_w = n as f64 * shape.0 + n.saturating_sub(1) as f64 * gx;
+        let x0 = m.left + (area_w - row_w) / 2.0;
+        for c in 0..n {
+            let x = x0 + c as f64 * (shape.0 + gx);
+            cells.push([x, top - shape.1, x + shape.0, top]);
+            turns.push(turn);
+        }
+        top -= shape.1 + gy;
+    }
+    Ok((cells, turns))
 }
 
 fn sequential_sheets(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sheet>, ImposeError> {
