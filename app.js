@@ -368,6 +368,7 @@ async function inksActive() {
   draw();
   say('Mengubah tinta…');
   await new Promise((r) => setTimeout(r, 20));
+  let note = null;
   try {
     const res = state.engine.manageInks(d.bytes.slice(), JSON.stringify(actions));
     const rep = JSON.parse(res.report);
@@ -376,7 +377,7 @@ async function inksActive() {
       ...Object.entries(rep.aliased).map(([n]) => `${n} → ${actions[n] && actions[n].into}`),
     ];
     if (!done.length) {
-      say(rep.kept.length ? `Tidak ada yang bisa diubah: ${rep.kept.slice(0, 4).join('; ')}` : 'Tidak ada yang berubah.', true);
+      note = [rep.kept.length ? `Tidak ada yang bisa diubah: ${rep.kept.slice(0, 4).join('; ')}` : 'Tidak ada yang berubah.', true];
       return;
     }
     const nd = addDoc(`${d.name} › Tinta`, res.bytes, [...d.tags, 'INK']);
@@ -384,13 +385,14 @@ async function inksActive() {
       state.view = 'doc';
       state.sheet = 0;
       const kept = rep.kept.length ? ` Dibiarkan: ${[...new Set(rep.kept)].slice(0, 4).join('; ')}.` : '';
-      say(`Tinta diubah: ${done.join(', ')}.${kept}`, !!rep.kept.length, !rep.kept.length);
+      note = [`Tinta diubah: ${done.join(', ')}.${kept}`, !!rep.kept.length, !rep.kept.length];
     }
   } catch (e) {
-    say('Ubah tinta gagal: ' + String(e.message || e), true);
+    note = ['Ubah tinta gagal: ' + String(e.message || e), true];
   } finally {
     state.busy = false;
     recompute();
+    if (note) say(...note);
   }
 }
 
@@ -401,13 +403,14 @@ async function outlineActive() {
   draw();
   say('Mengubah teks jadi outline…');
   await new Promise((r) => setTimeout(r, 20));
+  let note = null;
   try {
     const t0 = performance.now();
     const res = state.engine.outlineText(d.bytes.slice());
     const rep = JSON.parse(res.report);
     const bytes = res.bytes;
     if (!rep.outlined) {
-      say(rep.kept.length ? `Tidak ada teks yang bisa di-outline: ${rep.kept.map((k) => `hal. ${k.page} ${k.reason}`).slice(0, 4).join('; ')}` : 'Tidak ada teks untuk di-outline.', !!rep.kept.length);
+      note = [rep.kept.length ? `Tidak ada teks yang bisa di-outline: ${rep.kept.map((k) => `hal. ${k.page} ${k.reason}`).slice(0, 4).join('; ')}` : 'Tidak ada teks untuk di-outline.', !!rep.kept.length];
       return;
     }
     const nd = addDoc(`${d.name} › Outline`, bytes, [...d.tags, 'OUTLINE']);
@@ -415,13 +418,14 @@ async function outlineActive() {
       state.view = 'doc';
       state.sheet = 0;
       const kept = rep.kept.length ? ` ${rep.kept.length} bagian dibiarkan sebagai teks: ${[...new Set(rep.kept.map((k) => `hal. ${k.page} (${k.reason})`))].slice(0, 4).join(', ')}.` : '';
-      say(`Outline selesai: ${rep.outlined} blok teks, ${rep.glyphs} huruf, ${fmt((performance.now() - t0) / 1000, 1)} detik.${kept}`, !!rep.kept.length, !rep.kept.length);
+      note = [`Outline selesai: ${rep.outlined} blok teks, ${rep.glyphs} huruf, ${fmt((performance.now() - t0) / 1000, 1)} detik.${kept}`, !!rep.kept.length, !rep.kept.length];
     }
   } catch (e) {
-    say('Outline gagal: ' + String(e.message || e), true);
+    note = ['Outline gagal: ' + String(e.message || e), true];
   } finally {
     state.busy = false;
     recompute();
+    if (note) say(...note);
   }
 }
 
