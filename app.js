@@ -138,7 +138,7 @@ function markFields() {
     <h2 class="sub2">Crop mark</h2>
     <div class="field">
       ${chk('marks', 'Pakai crop mark', true)}
-      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)'], ['centred', 'Silang di sudut (seperti PAULUS)']], 'corner')}
+      ${sel('mstyle', 'Jenis', [['corner', 'Sudut'], ['japanese', 'Jepang (trim + bleed)'], ['centred', 'INDIE Crop Mark']], 'corner')}
       ${sel('mcolour', 'Warna', [['registration', 'Registration (semua plat)'], ['black', 'Hitam (plat K)']], 'registration')}
       ${num('mlen', 'Panjang (mm)', 5, 'min="0.1"')}
       ${num('moff', 'Jarak dari potong (mm)', 3)}
@@ -582,9 +582,14 @@ function draw() {
   const blocked = !!(d && d.pf && d.pf.overall === 'fail');
   $('ackwrap').hidden = !blocked;
   $('apply').disabled = !L || state.busy || (blocked && !$('ack').checked);
-  $('download').disabled = !d || state.busy;
+  // In a layout view the buttons save the imposed result; elsewhere the tab itself.
+  const layoutView = state.view === 'layout' || state.view === 'picture';
+  $('download').textContent = layoutView ? 'Download hasil impose' : state.view === 'pages' ? 'Download hasil edit' : 'Download tab ini';
+  $('saveas').textContent = layoutView ? 'Simpan hasil ke folder…' : 'Simpan ke folder…';
+  const exportLocked = layoutView && (!L || (blocked && !$('ack').checked));
+  $('download').disabled = !d || state.busy || exportLocked;
   $('saveas').hidden = !('showSaveFilePicker' in window);
-  $('saveas').disabled = !d || state.busy;
+  $('saveas').disabled = !d || state.busy || exportLocked;
   if (!d) {
     $('summary').innerHTML = '<span class="hint">Buka PDF untuk mulai.</span>';
     clearCanvas();
@@ -1489,7 +1494,8 @@ async function applyPages(nextView = 'doc', auto = false) {
 // ---- actions ------------------------------------------------------------------------------
 async function apply() {
   const d = activeDoc();
-  if (!d || !state.layout) return;
+  if (!d || !state.layout) return null;
+  let nd = null;
   state.busy = true;
   draw();
   say('Membuat layout…');
@@ -1498,7 +1504,7 @@ async function apply() {
     const j = job();
     const t0 = performance.now();
     const out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
-    const nd = addDoc(`${d.name} › ${jobLabel(j)}`, out, [...d.tags, MODE_TAG[j.mode]]);
+    nd = addDoc(`${d.name} › ${jobLabel(j)}`, out, [...d.tags, MODE_TAG[j.mode]]);
     if (nd) {
       state.view = 'doc';
       state.sheet = 0;
@@ -1510,6 +1516,7 @@ async function apply() {
     state.busy = false;
     recompute();
   }
+  return nd;
 }
 
 function fileName(d) {
@@ -1517,13 +1524,43 @@ function fileName(d) {
   return `${root}${d.tags.length ? '_' + d.tags.join('_') : ''}.pdf`;
 }
 
-async function save(saveAs) {
-  const d = activeDoc();
+/**
+ * Download / save to folder. In a layout view the current layout is imposed first (as a new
+ * tab) and that result is saved; in the page editor the edits are applied first.
+ */
+async function exportFile(saveAs) {
+  const d0 = activeDoc();
+  if (!d0) return;
+  const picker = saveAs && 'showSaveFilePicker' in window;
+  const layoutView = state.view === 'layout' || state.view === 'picture';
+  // The folder picker needs the click itself, so ask for the place before the work starts.
+  let handle = null;
+  if (picker) {
+    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode]] } : d0;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: fileName(guess), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
+    } catch (e) {
+      if (!(e && e.name === 'AbortError')) say(String(e.message || e), true);
+      return;
+    }
+  }
+  let target = d0;
+  if (layoutView) {
+    target = await apply();
+    if (!target) return;
+  } else if (state.view === 'pages') {
+    if (!(await leavePages('pages'))) return;
+    target = activeDoc();
+  }
+  await save(target, handle);
+}
+
+async function save(d, handle) {
   if (!d) return;
   const blob = new Blob([d.bytes], { type: 'application/pdf' });
   try {
-    if (saveAs && 'showSaveFilePicker' in window) {
-      const h = await window.showSaveFilePicker({ suggestedName: fileName(d), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
+    if (handle) {
+      const h = handle;
       const w = await h.createWritable();
       await w.write(blob);
       await w.close();
@@ -1625,8 +1662,8 @@ $('cv').addEventListener('pointermove', manualPointerMove);
 $('cv').addEventListener('pointerup', manualPointerUp);
 $('cv').addEventListener('pointercancel', manualPointerUp);
 document.addEventListener('keydown', manualKey);
-$('download').addEventListener('click', async () => { if (await leavePages('pages')) save(false); });
-$('saveas').addEventListener('click', async () => { if (await leavePages('pages')) save(true); });
+$('download').addEventListener('click', () => exportFile(false));
+$('saveas').addEventListener('click', () => exportFile(true));
 
 orgWire();
 renderOptions();
