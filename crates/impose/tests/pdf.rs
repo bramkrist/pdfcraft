@@ -9,7 +9,12 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RenderedPage, R
 
 /// A PDF with one page per entry of `pages`: (width, height, content stream).
 fn pdf(pages: &[(u32, u32, &str)]) -> Vec<u8> {
-    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    pdf_with_root(pages, "")
+}
+
+/// Like [`pdf`], with `root_extra` added to the catalog.
+fn pdf_with_root(pages: &[(u32, u32, &str)], root_extra: &str) -> Vec<u8> {
+    let mut objs: Vec<String> = vec![format!("<< /Type /Catalog /Pages 2 0 R {root_extra} >>")];
     let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()));
     for (i, (w, h, body)) in pages.iter().enumerate() {
@@ -94,4 +99,27 @@ fn the_back_page_is_printed_behind_the_front_cell_when_the_sheet_is_turned() {
     assert_eq!(rgb(&back, 90, 50), BLUE);
     assert_eq!(rgb(&back, 210, 50), BLUE);
     assert_eq!(rgb(&back, 150, 50), WHITE);
+}
+
+/// The catalog entry `key` of an imposed file, written back out as text for comparison.
+fn catalog_entry(bytes: &[u8], key: &[u8]) -> Option<String> {
+    let doc = Document::open(Arc::new(bytes.to_vec())).expect("open output");
+    let root = doc.trailer().get(b"Root")?;
+    let entry = doc.resolve(root).as_dict()?.get(key)?.clone();
+    Some(format!("{:?}", doc.resolve(&entry)))
+}
+
+#[test]
+fn the_output_intent_of_the_source_survives_imposition() {
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (CGATS TR 001) >>]";
+    let src = pdf_with_root(&[(100, 60, "0 1 1 0 k 0 0 100 60 re f")], intent);
+    let doc = Document::open(Arc::new(src.clone())).expect("open");
+    let out = impose_document(&doc, &StepRepeat::new((300.0, 200.0)), Content::Document).expect("impose");
+    let before = catalog_entry(&src, b"OutputIntents").expect("the fixture has an output intent");
+    let kept = catalog_entry(&out, b"OutputIntents").expect("the catalog lost its output intent");
+    assert_eq!(kept, before, "the output condition was changed");
+    // And a source without one gains none.
+    let plain = Document::open(Arc::new(pdf(&[(100, 60, "0 0 100 60 re f")]))).expect("open");
+    let out = impose_document(&plain, &StepRepeat::new((300.0, 200.0)), Content::Document).expect("impose");
+    assert!(catalog_entry(&out, b"OutputIntents").is_none());
 }

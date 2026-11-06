@@ -351,9 +351,14 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
     cat.set(b"Pages".to_vec(), Object::Ref(pages_root));
     // Keep the layers' configuration, or a layer that is off in the document would print: the
     // pages' marked content still refers to its groups, and without this nothing says they are off.
-    let layers = src.trailer().get(b"Root").and_then(|r| src.resolve(r).as_dict().and_then(|root| root.get(b"OCProperties").cloned()));
-    if let Some(layers) = layers {
+    let root_of = |key: &[u8]| src.trailer().get(b"Root").and_then(|r| src.resolve(r).as_dict().and_then(|root| root.get(key).cloned()));
+    if let Some(layers) = root_of(b"OCProperties") {
         cat.set(b"OCProperties".to_vec(), layers);
+    }
+    // The output condition (PDF/X, PDF/A) describes the colours of the content the sheets still
+    // carry untouched; dropping it would leave device colours with no stated print condition.
+    if let Some(intents) = root_of(b"OutputIntents") {
+        cat.set(b"OutputIntents".to_vec(), intents);
     }
     let root = doc.add(Object::Dict(cat));
     doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
