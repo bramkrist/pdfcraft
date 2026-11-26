@@ -130,10 +130,12 @@ impl Default for ImposeDraft {
             mark: Marks::default(),
             preset: 0,
             custom: (320.0 * MM, 480.0 * MM),
-            orient: Orient::Best,
+            // Sheets stay as chosen (tall) and no rows are turned unless asked: a turned row is
+            // cut the wrong way round, which matters most for two-sided work.
+            orient: Orient::Tall,
             max_cols: 0,
             max_rows: 0,
-            rotate: true,
+            rotate: false,
             binding: 0,
             signature: 16,
             full_last: false,
@@ -521,7 +523,7 @@ fn screen_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, kind: ImposeKind, unit: 
     ui.horizontal(|ui| {
         widgets::radio_value(ui, &mut d.orient, Orient::Tall, tl!("Tall"));
         widgets::radio_value(ui, &mut d.orient, Orient::Wide, tl!("Wide"));
-        widgets::radio_value(ui, &mut d.orient, Orient::Best, tl!("Best fit"));
+        widgets::radio_value(ui, &mut d.orient, Orient::Best, tl!("Best fit (may use the sheet wide)"));
     });
     heading(ui, tl!("Layout"));
     egui::Grid::new("impose-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -534,7 +536,7 @@ fn screen_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, kind: ImposeKind, unit: 
     });
     if kind == ImposeKind::StepRepeat {
         let auto = d.max_cols == 0 && d.max_rows == 0;
-        ui.add_enabled(auto, widgets::checkbox(&mut d.rotate, tl!("Turn rows of pages where that fits more copies")));
+        ui.add_enabled(auto, widgets::checkbox(&mut d.rotate, tl!("Turn rows of pages to fit more copies (optional; risky for two-sided cutting)")));
         if !auto {
             ui.label(egui::RichText::new(tl!("Turning rows needs Any columns and rows.")).weak().small());
         }
@@ -729,7 +731,7 @@ mod tests {
 
     #[test]
     fn best_fit_picks_the_orientation_that_places_more() {
-        let mut d = ImposeDraft { spacing: Spacing::None, marks: false, rotate: false, ..Default::default() };
+        let mut d = ImposeDraft { spacing: Spacing::None, marks: false, rotate: false, orient: Orient::Best, ..Default::default() };
         d.preset = 3; // A3 holds 2 x 2 A5 tall, 2 x 1 wide.
         let s = d.summary(ImposeKind::StepRepeat, &[A5]).unwrap();
         assert_eq!((s.cols, s.rows, s.per_sheet), (2, 2, 4));
@@ -781,12 +783,23 @@ mod tests {
         // Business cards on A3+ wide: straight rows and then a row turned a quarter turn, which
         // has more columns; one "cols × rows" would be wrong.
         let card = (90.0 * MM, 55.0 * MM);
-        let d = ImposeDraft { orient: Orient::Wide, ..Default::default() };
+        let d = ImposeDraft { orient: Orient::Wide, rotate: true, ..Default::default() };
         let s = d.summary(ImposeKind::StepRepeat, &[card]).unwrap();
         assert_eq!(s.layout, "5 × 4 + 8 × 1");
         assert_eq!(s.per_sheet, 28);
         let d = ImposeDraft { rotate: false, orient: Orient::Wide, ..Default::default() };
         assert_eq!(d.summary(ImposeKind::StepRepeat, &[card]).unwrap().layout, "5 × 5");
+    }
+
+    #[test]
+    fn a_fresh_wizard_keeps_the_sheet_tall_and_turns_no_rows() {
+        let d = ImposeDraft::default();
+        assert_eq!(d.orient, Orient::Tall);
+        assert!(!d.rotate);
+        let card = (90.0 * MM, 55.0 * MM);
+        let s = d.summary(ImposeKind::StepRepeat, &[card]).unwrap();
+        assert!(s.sheet.0 < s.sheet.1, "tall sheet");
+        assert!(!s.layout.contains('+'), "no turned rows: {}", s.layout);
     }
 
     #[test]

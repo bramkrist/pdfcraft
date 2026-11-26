@@ -238,3 +238,44 @@ fn booklet_creep_shifts_the_inner_sheet() {
     assert!((x - 2.0).abs() < 1e-6, "{x}");
     assert!((l.sheets[0].cells[0].rect_mm[0]).abs() < 1e-6);
 }
+
+/// The cells of the first and second sheet of two booklet leaves (front, back),
+/// two copies per sheet, as the "2 buku per lembar" chain lays them out.
+fn two_up(leaf: [f64; 2], sheet: [f64; 2], cols: usize, rows: usize, duplex: &str) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    let j = job(&format!(
+        r#"{{"mode":"repeat","sheet_mm":[{},{}],"margin_mm":8,"cols":{cols},"rows":{rows},"gutter_mm":[0,0],"bleed_mm":0,"duplex":"{duplex}"}}"#,
+        sheet[0], sheet[1]
+    ));
+    let l = layout(&[leaf, leaf], &j).expect("layout");
+    assert_eq!(l.sheet_count, 2);
+    let rects = |i: usize| l.sheets[i].cells.iter().map(|c| c.rect_mm).collect::<Vec<_>>();
+    (rects(0), rects(1))
+}
+
+#[test]
+fn two_booklets_on_one_sheet_keep_each_back_behind_its_front() {
+    // Portrait sheet, one column, two rows: a booklet leaf's back turns like a page, which is
+    // the long edge of a portrait sheet, so left and right swap.
+    let (front, back) = two_up([296.0, 210.0], [320.0, 450.0], 1, 2, "long-edge");
+    assert_eq!(front.len(), 2);
+    for f in &front {
+        let mirrored = [320.0 - f[2], f[1], 320.0 - f[0], f[3]];
+        assert!(back.iter().any(|b| b.iter().zip(&mirrored).all(|(x, y)| (x - y).abs() < 1e-6)), "{f:?} has no back in {back:?}");
+    }
+    // The same two leaves side by side on a landscape sheet: that page turn is now the short edge.
+    let (front, back) = two_up([210.0, 148.0], [450.0, 320.0], 2, 1, "short-edge");
+    for f in &front {
+        let mirrored = [450.0 - f[2], f[1], 450.0 - f[0], f[3]];
+        assert!(back.iter().any(|b| b.iter().zip(&mirrored).all(|(x, y)| (x - y).abs() < 1e-6)), "{f:?} has no back in {back:?}");
+    }
+}
+
+#[test]
+fn long_edge_means_the_physical_long_edge_on_a_landscape_sheet() {
+    // Landscape sheet, "long-edge": the sheet is turned over its long (horizontal) edge, so top
+    // and bottom swap and the back cell sits at the same x.
+    let (front, back) = two_up([296.0, 210.0], [450.0, 320.0], 1, 1, "long-edge");
+    let (f, b) = (front[0], back[0]);
+    assert!((b[0] - f[0]).abs() < 1e-6 && (b[2] - f[2]).abs() < 1e-6, "{f:?} {b:?}");
+    assert!(((320.0 - f[3]) - b[1]).abs() < 1e-6, "{f:?} {b:?}");
+}

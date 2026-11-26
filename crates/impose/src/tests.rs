@@ -158,7 +158,8 @@ fn sequential_duplex_puts_the_next_chunk_on_the_back_in_the_mirrored_cell() {
     s.fill = Fill::Sequential;
     s.cols = Some(3);
     s.rows = Some(1);
-    s.duplex = Some(Duplex::LongEdge);
+    // A landscape sheet: left and right swap when it is turned over its short edge.
+    s.duplex = Some(Duplex::ShortEdge);
     let sheets = step_and_repeat(&[(100.0, 100.0); 6], &s).expect("layout");
     assert_eq!(sheets.len(), 2);
     assert_eq!(pages_of(&sheets[0]), vec![0, 1, 2]);
@@ -408,7 +409,8 @@ fn duplex_cut_stack_keeps_each_back_behind_its_front() {
     s.fill = Fill::CutStack { copies: 1 };
     s.cols = Some(4);
     s.rows = Some(2);
-    s.duplex = Some(Duplex::LongEdge);
+    // A landscape sheet: left and right swap when it is turned over its short edge.
+    s.duplex = Some(Duplex::ShortEdge);
     let sheets = step_and_repeat(&[(100.0, 100.0); 32], &s).expect("layout");
     assert_eq!(sheets.len(), 4);
     for pair in sheets.chunks(2) {
@@ -525,4 +527,26 @@ fn a_page_rounded_a_hair_over_the_room_still_fits() {
     assert_eq!(sheets[0].placed.len(), 2);
     // A real overrun is still refused.
     assert!(matches!(step_and_repeat(&[(596.0, 419.53)], &s), Err(ImposeError::DoesNotFit { .. })));
+}
+
+#[test]
+fn the_edge_a_sheet_is_turned_over_is_the_physical_one_whatever_its_orientation() {
+    // 2 x 1 cells of 100 x 100 on a landscape and on a portrait sheet, asymmetric margins.
+    for (sheet, long_swaps_left_right) in [((300.0, 200.0), false), ((200.0, 300.0), true)] {
+        for duplex in [Duplex::LongEdge, Duplex::ShortEdge] {
+            let mut s = StepRepeat::new(sheet);
+            s.margins = Margins { left: 10.0, bottom: 20.0, right: 40.0, top: 30.0 };
+            s.cols = Some(1);
+            s.rows = Some(1);
+            s.duplex = Some(duplex);
+            let sheets = step_and_repeat(&[(100.0, 100.0), (100.0, 100.0)], &s).expect("layout");
+            let ((fx, fy), (bx, by)) = (origin(&sheets[0].placed[0]), origin(&sheets[1].placed[0]));
+            let left_right = (duplex == Duplex::LongEdge) == long_swaps_left_right;
+            if left_right {
+                assert!(close(bx, sheet.0 - fx - 100.0) && close(by, fy), "{sheet:?} {duplex:?}");
+            } else {
+                assert!(close(bx, fx) && close(by, sheet.1 - fy - 100.0), "{sheet:?} {duplex:?}");
+            }
+        }
+    }
 }

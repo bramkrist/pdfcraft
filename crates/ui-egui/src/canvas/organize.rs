@@ -166,6 +166,16 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
             let any = |f: &dyn Fn(&egui::Event) -> bool| i.events.iter().any(f);
             (any(&|e| matches!(e, egui::Event::Copy)), any(&|e| matches!(e, egui::Event::Cut)), any(&|e| matches!(e, egui::Event::Paste(_))))
         });
+        // The key itself also counts: where the clipboard holds nothing to paste there is no
+        // paste event, only the key (web builds), and the pages live on the app's own clipboard.
+        let (copy_key, cut_key, paste_key) = ui.input_mut(|i| {
+            (
+                i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::C)),
+                i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::X)),
+                i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::V)),
+            )
+        });
+        let (copy, cut, paste) = (copy || copy_key, cut || cut_key, paste || paste_key);
         if copy || cut {
             view.pending_action = Some(ViewAction::CopyPages { cut });
         }

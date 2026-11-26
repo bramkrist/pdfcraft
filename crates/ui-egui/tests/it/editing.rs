@@ -3291,6 +3291,25 @@ fn copying_cutting_and_pasting_pages() {
     assert_eq!(page_texts(h.state()).len(), 5);
 }
 
+#[test]
+fn ctrl_c_and_ctrl_v_copy_and_paste_pages_without_any_text_on_the_system_clipboard() {
+    // The windowing layer reports a paste only when the system clipboard has text; the key press
+    // itself must be enough to paste the pages copied inside the app.
+    let mut h = organize(4);
+    let before = page_texts(h.state());
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(2);
+    assert!(h.state().page_clipboard.is_some(), "Ctrl+C copied the selected page");
+    h.state_mut().views[0].select_pages(&[2]);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::V);
+    h.run_steps(3);
+    let after = page_texts(h.state());
+    assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()], "pasted after page 3");
+}
+
 fn source_font_fixture() -> Vec<u8> {
     source_font_fixture_with_text("BT /F1 18 Tf 20 220 Td (Serif) Tj ET BT /F2 18 Tf 20 120 Td (Mono) Tj ET")
 }

@@ -623,6 +623,12 @@ impl PdfCraftApp {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
         let what = if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) };
+        // The windowing layer turns Ctrl/⌘+V into a paste event only when the system clipboard
+        // holds something to paste, so a page copy leaves a line of text there: without it the
+        // shortcut did nothing unless some unrelated text happened to be on the clipboard.
+        if let Some(ctx) = &self.ctx {
+            ctx.copy_text(format!("PdfCraft: {what} of {}", self.page_clipboard.as_ref().map_or("", |c| c.name.as_str())));
+        }
         if cut {
             self.notify_fmt("Cut {what}", &[("what", &what)]);
         } else {

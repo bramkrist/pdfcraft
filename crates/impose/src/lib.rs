@@ -91,9 +91,11 @@ pub enum Fill {
 /// How the printed sheet is turned over to print its back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Duplex {
-    /// Turned over the long edge of the sheet (left and right swap).
+    /// Turned over the long edge of the sheet: left and right swap on a portrait sheet, top and
+    /// bottom on a landscape one.
     LongEdge,
-    /// Turned over the short edge of the sheet (top and bottom swap).
+    /// Turned over the short edge of the sheet: top and bottom swap on a portrait sheet, left and
+    /// right on a landscape one.
     ShortEdge,
 }
 
@@ -297,11 +299,25 @@ fn grid(spec: &StepRepeat, cell: (f64, f64)) -> Result<Vec<Rect>, ImposeError> {
     Ok(cells)
 }
 
+/// Whether turning `sheet` over its `duplex` edge swaps left and right (otherwise top and bottom).
+///
+/// The edge is the physical one: on a portrait sheet the long edge is vertical, so turning over it
+/// swaps left and right; on a landscape sheet the long edge is horizontal and it swaps top and
+/// bottom. A square sheet counts as portrait.
+fn swaps_left_right(sheet: (f64, f64), duplex: Duplex) -> bool {
+    let portrait = sheet.0 <= sheet.1;
+    match duplex {
+        Duplex::LongEdge => portrait,
+        Duplex::ShortEdge => !portrait,
+    }
+}
+
 /// `rect` as it appears from the other side of the sheet.
 fn mirrored(rect: Rect, sheet: (f64, f64), duplex: Duplex) -> Rect {
-    match duplex {
-        Duplex::LongEdge => [sheet.0 - rect[2], rect[1], sheet.0 - rect[0], rect[3]],
-        Duplex::ShortEdge => [rect[0], sheet.1 - rect[3], rect[2], sheet.1 - rect[1]],
+    if swaps_left_right(sheet, duplex) {
+        [sheet.0 - rect[2], rect[1], sheet.0 - rect[0], rect[3]]
+    } else {
+        [rect[0], sheet.1 - rect[3], rect[2], sheet.1 - rect[1]]
     }
 }
 
@@ -497,13 +513,15 @@ fn repeat_sheets(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sheet>, 
         {
             let back_cells: Vec<Rect> = cells.iter().map(|c| mirrored(*c, spec.sheet, duplex)).collect();
             let back_slots: Vec<Slot> = back_cells.iter().map(|_| Some((i + 1, back_size))).collect();
-            // Turned over the long edge, a page whose head pointed left now has it pointing right:
-            // its back turns the other way so heads line up. Over the short edge they stay.
+            // Turned over so that left and right swap, a page whose head pointed left now has it
+            // pointing right: its back turns the other way so heads line up. When top and bottom
+            // swap instead, they stay.
+            let swaps = swaps_left_right(spec.sheet, duplex);
             let back_turns: Vec<Turn> = turns
                 .iter()
-                .map(|t| match (t, duplex) {
-                    (Turn::Ccw, Duplex::LongEdge) => Turn::Cw,
-                    (Turn::Cw, Duplex::LongEdge) => Turn::Ccw,
+                .map(|t| match (t, swaps) {
+                    (Turn::Ccw, true) => Turn::Cw,
+                    (Turn::Cw, true) => Turn::Ccw,
                     (t, _) => *t,
                 })
                 .collect();

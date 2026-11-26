@@ -872,3 +872,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+- **2026-11-26:** Imposition: duplex edges are physical (long edge of a landscape sheet swaps top and bottom), the wizard keeps the sheet tall and turns no rows by default (both optional), Ctrl/⌘+C/X/V copy, cut and paste pages in Organize even with no text on the system clipboard; impose-web gains 2 booklets per sheet.
