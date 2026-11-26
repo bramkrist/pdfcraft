@@ -153,7 +153,7 @@ function sheetFields(defaultSheet = 'A3+ 32×48', withAuto = false) {
   return `
     ${sel('sheet', 'Kertas', [...(withAuto ? [['auto', 'Otomatis (2× halaman)']] : []), ...Object.keys(SHEETS).map((k) => [k, k]), ['custom', 'Custom']], defaultSheet, 'full')}
     <div class="full row2" id="customsheet" hidden>${num('sheet_w', 'Lebar (mm)', 320)}${num('sheet_h', 'Tinggi (mm)', 480)}</div>
-    ${withAuto ? '' : sel('orient', 'Arah', [['best', 'Terbaik (paling banyak up)'], ['landscape', 'Landscape'], ['portrait', 'Portrait']], 'best')}
+    ${withAuto ? '' : sel('orient', 'Arah kertas', [['portrait', 'Portrait (sesuai ukuran kertas)'], ['landscape', 'Landscape'], ['best', 'Terbaik (bisa landscape sendiri)']], 'portrait')}
     ${withAuto ? '' : num('margin', 'Margin (mm)', 5, 'min="0"')}`;
 }
 
@@ -180,7 +180,7 @@ function gridFields(withCopies) {
     ${num('bleed', 'Bleed di file (mm)', 0, 'min="0"')}
     ${sel('duplex', 'Sisi cetak', [['', '1 sisi'], ['long-edge', '2 sisi · balik sisi panjang'], ['short-edge', '2 sisi · balik sisi pendek']], '')}
     ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}
-    ${state.mode === 'repeat' ? chk('rotate', 'Putar sebagian baris kalau muat lebih banyak', true) : ''}`;
+    ${state.mode === 'repeat' ? chk('rotate', 'Optimalkan: putar sebagian baris 90° kalau muat lebih banyak (hati-hati saat potong, terutama 2 sisi)', false) : ''}`;
 }
 
 function renderOptions() {
@@ -201,6 +201,14 @@ function renderOptions() {
       <p class="hint full">Creep: halaman lembar dalam digeser ke punggung supaya hasil potong rata. Isi tebal kertas, mis. 0,1 mm (HVS 80) atau 0,25 mm (art carton 260). 0 = tanpa creep.</p>
       ${chk('scale', 'Skala menyesuaikan kertas', true)}
       ${chk('rtl', 'Jilid di kanan', false)}
+      ${sel('per', 'Buku per lembar cetak', [['1', '1 buku (biasa)'], ['2', '2 buku · potong tengah']], '1', 'full')}
+      <div class="full" id="bigbox" hidden><div class="field">
+        ${sel('bigsheet', 'Kertas cetak', Object.keys(SHEETS).map((k) => [k, k]), 'SRA3', 'full')}
+        ${num('bigmargin', 'Margin (mm)', 8, 'min="0"')}
+        ${num('biggap', 'Jarak antar buku (mm)', 0, 'min="0"')}
+        ${chk('bigmarks', 'Garis potong di tengah dan sudut', true)}
+        <p class="hint full">"Kertas" di atas = ukuran satu buku terbuka (mis. A4 untuk buku A5). Dua salinan buku disusun di kertas cetak, depan-belakang sudah selaras: cetak bolak-balik, balik seperti membalik halaman buku (sisi panjang bila kertas portrait), lalu potong tengah. Hasilnya tab baru; pratinjau di kanan masih satu buku.</p>
+      </div></div>
     </div>`;
   } else if (state.mode === 'manual') {
     const d = activeDoc();
@@ -310,7 +318,48 @@ function sheetMm() {
   return [w, h];
 }
 
+const bookletPer = () => (val('per') === '2' ? 2 : 1);
+
+function syncBig() {
+  const b = document.getElementById('bigbox');
+  if (b) b.hidden = bookletPer() !== 2;
+}
+
+/**
+ * Step & Repeat job that lays two copies of a finished booklet leaf on one press sheet.
+ * Booklet backs are laid out for turning the leaf like a page (a mirror about the vertical
+ * axis), which is exactly what "long-edge" does to the cells here, so fronts and backs of the
+ * two copies line up. Prefers one column, two rows on a portrait sheet; falls back to side by
+ * side on a landscape one. Throws a readable message when two leaves do not fit.
+ */
+function twoUpJob(leaf) {
+  const [w, h] = leaf;
+  const name = val('bigsheet') in SHEETS ? val('bigsheet') : 'SRA3';
+  const [a, b] = SHEETS[name];
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  const m = Math.max(0, numOr('bigmargin', 8)), g = Math.max(0, numOr('biggap', 0));
+  const tries = [
+    { sheet: [lo, hi], cols: 1, rows: 2 },
+    { sheet: [hi, lo], cols: 2, rows: 1 },
+  ];
+  const t = tries.find((c) => c.cols * w + (c.cols - 1) * g + 2 * m <= c.sheet[0] + 0.01 && c.rows * h + (c.rows - 1) * g + 2 * m <= c.sheet[1] + 0.01);
+  if (!t) throw new Error(`2 buku (${fmt(w, 0)}×${fmt(h, 0)} mm per buku) tidak muat di ${name} dengan margin ${fmt(m, 0)} mm. Pilih kertas lebih besar atau kecilkan margin.`);
+  const j = {
+    mode: 'repeat',
+    sheet_mm: t.sheet,
+    margin_mm: m,
+    cols: t.cols,
+    rows: t.rows,
+    gutter_mm: [t.cols > 1 ? g : 0, t.rows > 1 ? g : 0],
+    bleed_mm: 0,
+    duplex: t.sheet[0] <= t.sheet[1] ? 'long-edge' : 'short-edge',
+  };
+  if (val('bigmarks')) j.marks = { length_mm: 7, offset_mm: 0, style: 'centred', width_pt: 0.5, registration: true };
+  return { job: j, name };
+}
+
 function job() {
+  syncBig();
   const j = { mode: state.mode };
   if (state.mode === 'bleed') {
     j.add_bleed_mm = numOr('add', 3);
@@ -1826,6 +1875,7 @@ async function apply() {
   const d = activeDoc();
   if (!d || !state.layout) return null;
   let nd = null;
+  let note = null;
   state.busy = true;
   draw();
   say('Membuat layout…');
@@ -1833,18 +1883,30 @@ async function apply() {
   try {
     const j = job();
     const t0 = performance.now();
-    const out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
-    nd = addDoc(`${d.name} › ${jobLabel(j)}`, out, [...d.tags, MODE_TAG[j.mode]]);
+    let out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
+    let label = jobLabel(j);
+    const tags = [...d.tags, MODE_TAG[j.mode]];
+    if (j.mode === 'booklet' && bookletPer() === 2) {
+      const leaf = JSON.parse(state.engine.pageSizes(out.slice()))[0];
+      if (!leaf) throw new Error('Booklet kosong.');
+      const two = twoUpJob(leaf);
+      out = state.engine.impose(out.slice(), JSON.stringify(two.job));
+      label += ` 2 buku di ${two.name}`;
+      tags.push('2UP');
+    }
+    nd = addDoc(`${d.name} › ${label}`, out, tags);
     if (nd) {
       state.view = 'doc';
       state.sheet = 0;
-      say(`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik. Bisa di-layout lagi atau disimpan.`, false, true);
+      note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik. Bisa di-layout lagi atau disimpan.`, false, true];
     }
   } catch (e) {
-    say(String(e.message || e), true);
+    note = [String(e.message || e), true];
   } finally {
     state.busy = false;
     recompute();
+    // recompute() clears the message line, so the result is said after it.
+    if (note) say(...note);
   }
   return nd;
 }
@@ -1866,7 +1928,7 @@ async function exportFile(saveAs) {
   // The folder picker needs the click itself, so ask for the place before the work starts.
   let handle = null;
   if (picker) {
-    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode]] } : d0;
+    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
     try {
       handle = await window.showSaveFilePicker({ suggestedName: fileName(guess), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
     } catch (e) {
