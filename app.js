@@ -178,6 +178,7 @@ function gridFields(withCopies) {
     ${num('gx', 'Jarak kolom (mm)', 0, 'min="0"')}
     ${num('gy', 'Jarak baris (mm)', 0, 'min="0"')}
     ${num('bleed', 'Bleed di file (mm)', 0, 'min="0"')}
+    ${num('scalepct', 'Skala halaman (%)', 100, 'min="1" max="10000"')}
     ${sel('duplex', 'Sisi cetak', [['', '1 sisi'], ['long-edge', '2 sisi · balik sisi panjang'], ['short-edge', '2 sisi · balik sisi pendek']], '')}
     ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}
     ${state.mode === 'repeat' ? chk('rotate', 'Optimalkan: putar sebagian baris 90° kalau muat lebih banyak (hati-hati saat potong, terutama 2 sisi)', false) : ''}`;
@@ -394,6 +395,8 @@ function job() {
   j.sheet_mm = sheet;
   if (val('orient') === 'best') j.sheet_orientation = 'best';
   if (state.mode === 'repeat' && val('rotate')) j.rotate = true;
+  const pct = numOr('scalepct', 100);
+  if (pct !== 100) j.scale_percent = pct;
   j.margin_mm = numOr('margin', 5);
   const cols = numOr('cols', null), rows = numOr('rows', null);
   if (cols) j.cols = cols;
