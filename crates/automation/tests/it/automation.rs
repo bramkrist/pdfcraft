@@ -5285,6 +5285,34 @@ fn two_booklets_per_sheet_through_tools() {
 }
 
 #[test]
+fn page_scale_through_tools() {
+    let dir = workdir("pagescale");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let base = json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "path": "s100.pdf" });
+    let full = ok(&mut a, "doc_impose", base);
+    // Half size: every cell is half as wide and tall, so at least four times as many fit (more
+    // when the smaller cells waste less of the sheet's edge).
+    let half = ok(&mut a, "doc_impose", json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "scale_percent": 50, "path": "s50.pdf" }));
+    assert!(half["up"].as_u64().unwrap() >= full["up"].as_u64().unwrap() * 4, "{half} against {full}");
+    // Fitting to a cell needs a cell, and a scale must be a sensible number.
+    for bad in [
+        json!({ "doc": doc, "sheet": "SRA3", "fit_cell": true, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "SRA3", "scale_percent": 0, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "SRA3", "scale_percent": -5, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_impose", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    let fit = ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "cell_width_mm": 100, "cell_height_mm": 100, "fit_cell": true, "path": "fit.pdf" }),
+    );
+    assert!(fit["up"].as_u64().unwrap() >= 1);
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
 fn cut_and_stack_through_tools() {
     let dir = workdir("cutstack");
     let mut a = auto(&dir);
@@ -11613,4 +11641,29 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(a.call("comments_copy", &json!({ "doc": src, "comments": [[9, 9]] })).is_err(), "no such comment");
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
+}
+
+#[test]
+fn remove_unused_space_crops_to_the_content() {
+    let dir = workdir("unusedspace");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The fixture pages are 200 x 300 with one line of text each.
+    let r = ok(&mut a, "page_remove_unused_space", json!({ "doc": doc, "pages": [1], "padding_pt": 2 }));
+    assert_eq!(r["cropped"], json!([1]), "{r}");
+    assert_eq!(r["blank_pages"], json!([]));
+    let [w, h] = [r["page_sizes"][0][0].as_f64().unwrap(), r["page_sizes"][0][1].as_f64().unwrap()];
+    assert!(w > 0.0 && h > 0.0 && w < 200.0 && h < 300.0, "page 1 is now {w} x {h}");
+    assert_eq!(r["page_sizes"][1], json!([200.0, 300.0]), "other pages are left alone");
+    assert_eq!(page_text(&mut a, doc)[0], "Page 1", "the text is still on the page");
+    // One undo puts the whole thing back.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let again = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [2] }));
+    assert_eq!(again["page_sizes"][0], json!([200.0, 300.0]), "undone");
+    // More padding keeps more of the page, and never more than the page.
+    let wide = ok(&mut a, "page_remove_unused_space", json!({ "doc": doc, "pages": [1], "padding_pt": 1000 }));
+    assert_eq!(wide["page_sizes"][0], json!([200.0, 300.0]));
+    for bad in [json!({ "doc": doc, "padding_pt": -1 }), json!({ "doc": doc, "padding_pt": 5000 })] {
+        assert!(matches!(a.call("page_remove_unused_space", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
 }

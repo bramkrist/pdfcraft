@@ -323,6 +323,7 @@ impl Automation {
                 self.apply(&a, Edit::RepeatPages { counts })?
             }
             "page_set_box" => self.page_set_box(&a)?,
+            "page_remove_unused_space" => self.page_remove_unused_space(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
             "xfa_to_static" => self.apply(&a, Edit::XfaToStatic)?,

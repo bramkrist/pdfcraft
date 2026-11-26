@@ -175,6 +175,11 @@ impl Automation {
             d => return Err(bad(format!("unknown duplex {d:?}"))),
         };
         spec.rotate = a.opt_bool("rotate")?.unwrap_or(false);
+        // The scale arrives as a percentage, as in a print dialog; 100 leaves the pages alone.
+        if let Some(pct) = a.opt_num("scale_percent")? {
+            spec.scale = pct / 100.0;
+        }
+        spec.fit_cell = a.opt_bool("fit_cell")?.unwrap_or(false);
         spec.marks = marks_arg(a)?;
         let content = content_arg(a)?;
         let sheets = impose::step_and_repeat(&sizes, &spec).map_err(|e| bad(e.to_string()))?;

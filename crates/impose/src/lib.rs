@@ -179,6 +179,11 @@ pub struct StepRepeat {
     /// quarter turn where that fits more copies (as press-room step & repeat does). Rows run
     /// from the top; each row is centred.
     pub rotate: bool,
+    /// Every page is scaled by this factor (1.0 = 100 %) before it is placed; the cells, the
+    /// grid and the marks follow the scaled size. The bleed is that of the first page, scaled with it.
+    pub scale: f64,
+    /// Scale each page to fill `cell` as far as its shape allows (needs `cell`), then by `scale`.
+    pub fit_cell: bool,
 }
 
 impl StepRepeat {
@@ -196,6 +201,8 @@ impl StepRepeat {
             duplex: None,
             marks: None,
             rotate: false,
+            scale: 1.0,
+            fit_cell: false,
         }
     }
 }
@@ -238,6 +245,12 @@ fn validate(spec: &StepRepeat, sizes: &[(f64, f64)]) -> Result<(), ImposeError> 
         if !m.offset.is_finite() || m.offset + m.length <= 0.0 {
             return Err(ImposeError::Invalid("mark offset", "finite, and leaving part of the mark outside the trim"));
         }
+    }
+    if !spec.scale.is_finite() || spec.scale <= 0.0 || spec.scale > MAX_SCALE {
+        return Err(ImposeError::Invalid("page scale", "above zero and at most 100 times the page"));
+    }
+    if spec.fit_cell && spec.cell.is_none() {
+        return Err(ImposeError::Invalid("fit to cell", "used together with a cell size"));
     }
     for &(w, h) in sizes {
         positive(w, "page width")?;
@@ -480,6 +493,37 @@ pub fn step_and_repeat(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sh
         return Err(ImposeError::NoPages);
     }
     validate(spec, sizes)?;
+    let factors: Vec<f64> = sizes.iter().map(|&size| page_factor(spec, size)).collect();
+    if factors.iter().all(|f| (f - 1.0).abs() < 1e-12) {
+        return lay_out(sizes, spec);
+    }
+    // Lay out the pages at their scaled sizes, then scale each placement back to the real page.
+    let scaled: Vec<(f64, f64)> = sizes.iter().zip(&factors).map(|(s, f)| (s.0 * f, s.1 * f)).collect();
+    let first = factors.first().copied().unwrap_or(1.0);
+    let inner = StepRepeat { scale: 1.0, fit_cell: false, bleed: spec.bleed * first, ..spec.clone() };
+    let mut sheets = lay_out(&scaled, &inner)?;
+    for placement in sheets.iter_mut().flat_map(|s| s.placed.iter_mut()) {
+        let f = factors.get(placement.page).copied().unwrap_or(1.0);
+        let m = &mut placement.matrix.0;
+        m[..4].iter_mut().for_each(|v| *v *= f);
+        placement.clip.iter_mut().for_each(|v| *v /= f);
+    }
+    Ok(sheets)
+}
+
+/// The most a page may be enlarged.
+const MAX_SCALE: f64 = 100.0;
+
+/// The factor a page of `size` is scaled by.
+fn page_factor(spec: &StepRepeat, size: (f64, f64)) -> f64 {
+    let fit = match spec.cell {
+        Some((cw, ch)) if spec.fit_cell && size.0 > 0.0 && size.1 > 0.0 => (cw / size.0).min(ch / size.1),
+        _ => 1.0,
+    };
+    (fit * spec.scale).clamp(1e-6, MAX_SCALE)
+}
+
+fn lay_out(sizes: &[(f64, f64)], spec: &StepRepeat) -> Result<Vec<Sheet>, ImposeError> {
     match spec.fill {
         Fill::Repeat => repeat_sheets(sizes, spec),
         Fill::Sequential => sequential_sheets(sizes, spec),

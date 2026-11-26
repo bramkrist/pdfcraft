@@ -590,3 +590,48 @@ fn two_up_rejects_nonsense_numbers() {
     assert!(two_up_spec((0.0, 100.0), &TwoUp::new((1000.0, 1000.0))).is_err());
     assert!(two_up_spec(leaf, &TwoUp::new((f64::INFINITY, 1000.0))).is_err());
 }
+
+#[test]
+fn scaling_pages_shrinks_the_cells_and_the_placements_follow() {
+    let page = (200.0, 300.0);
+    let full = step_and_repeat(&[page], &a3()).unwrap();
+    let half = step_and_repeat(&[page], &StepRepeat { scale: 0.5, ..a3() }).unwrap();
+    assert!(half[0].placed.len() > full[0].placed.len(), "smaller pages fit more copies");
+    let p = &half[0].placed[0];
+    assert_eq!(p.matrix.0[..4], [0.5, 0.0, 0.0, 0.5], "the page is drawn at half size");
+    assert_eq!(p.clip, [0.0, 0.0, 200.0, 300.0], "the whole page still shows");
+    // Neighbouring copies sit one scaled page apart.
+    let (a, b) = (&half[0].placed[0], &half[0].placed[1]);
+    let dx = (a.matrix.0[4] - b.matrix.0[4]).abs();
+    let dy = (a.matrix.0[5] - b.matrix.0[5]).abs();
+    assert!((dx - 100.0).abs() < 1e-9 || (dy - 150.0).abs() < 1e-9, "{dx} {dy}");
+}
+
+#[test]
+fn scaling_a_turned_row_scales_the_turn_too() {
+    let spec = StepRepeat { scale: 0.5, rotate: true, ..a3() };
+    for sheet in step_and_repeat(&[(200.0, 300.0)], &spec).unwrap() {
+        for p in &sheet.placed {
+            let m = p.matrix.0;
+            assert!(((m[0] * m[0] + m[1] * m[1]).sqrt() - 0.5).abs() < 1e-9, "{m:?}");
+        }
+    }
+}
+
+#[test]
+fn a_page_can_be_fitted_to_its_cell() {
+    // A 200 x 300 page in a 100 x 100 cell: limited by the height, so 1/3.
+    let spec = StepRepeat { cell: Some((100.0, 100.0)), fit_cell: true, ..a3() };
+    let sheets = step_and_repeat(&[(200.0, 300.0)], &spec).unwrap();
+    let m = sheets[0].placed[0].matrix.0;
+    assert!((m[0] - 1.0 / 3.0).abs() < 1e-9 && (m[3] - 1.0 / 3.0).abs() < 1e-9, "{m:?}");
+    // Fitting needs a cell to fit to.
+    assert!(step_and_repeat(&[(200.0, 300.0)], &StepRepeat { fit_cell: true, ..a3() }).is_err());
+}
+
+#[test]
+fn scale_rejects_nonsense() {
+    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, 1000.0] {
+        assert!(step_and_repeat(&[(200.0, 300.0)], &StepRepeat { scale, ..a3() }).is_err(), "{scale}");
+    }
+}

@@ -102,6 +102,8 @@ pub struct ImposeDraft {
     pub max_cols: usize,
     pub max_rows: usize,
     pub rotate: bool,
+    /// Page scale in percent (100: pages as they are).
+    pub scale_pct: f64,
     // Booklet.
     pub binding: usize,
     pub signature: usize,
@@ -143,6 +145,7 @@ impl Default for ImposeDraft {
             max_cols: 0,
             max_rows: 0,
             rotate: false,
+            scale_pct: 100.0,
             binding: 0,
             signature: 16,
             full_last: false,
@@ -269,6 +272,7 @@ impl ImposeDraft {
         s.duplex = self.duplex;
         s.marks = self.marks.then_some(self.mark);
         s.rotate = kind == ImposeKind::StepRepeat && self.rotate && self.max_cols == 0 && self.max_rows == 0;
+        s.scale = self.scale_pct / 100.0;
         s
     }
 
@@ -560,6 +564,9 @@ fn screen_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, kind: ImposeKind, unit: 
         ui.label(tl!("Maximum rows"));
         count(ui, &mut d.max_rows);
         ui.end_row();
+        ui.label(tl!("Page scale (%)"));
+        ui.add(egui::DragValue::new(&mut d.scale_pct).range(1.0..=10_000.0).speed(1.0).max_decimals(1));
+        ui.end_row();
     });
     if kind == ImposeKind::StepRepeat {
         let auto = d.max_cols == 0 && d.max_rows == 0;
@@ -799,6 +806,17 @@ mod tests {
         assert_eq!(wide.per_sheet, 9);
         assert_eq!(best.per_sheet, 10);
         assert!(best.sheet.0 < best.sheet.1, "tall sheet chosen");
+    }
+
+    #[test]
+    fn page_scale_changes_how_many_fit() {
+        let mut d = ImposeDraft { spacing: Spacing::None, marks: false, orient: Orient::Tall, preset: 3, ..Default::default() };
+        let full = d.summary(ImposeKind::StepRepeat, &[A5]).unwrap();
+        d.scale_pct = 50.0;
+        let half = d.summary(ImposeKind::StepRepeat, &[A5]).unwrap();
+        assert!(half.per_sheet >= full.per_sheet * 4, "{} against {}", half.per_sheet, full.per_sheet);
+        d.scale_pct = 0.0;
+        assert!(d.summary(ImposeKind::StepRepeat, &[A5]).is_err(), "no page is scaled to nothing");
     }
 
     #[test]

@@ -261,3 +261,17 @@ fn two_booklets_on_one_sheet_repeat_every_side_of_the_booklet_and_keep_the_big_s
     assert_eq!(rgb(&p, x, third), RED);
     assert_eq!(rgb(&p, x, third * 3), RED);
 }
+
+#[test]
+fn a_scaled_page_is_drawn_smaller_in_the_middle_of_its_cell() {
+    // A 100 x 100 red page at 50 % on a 200 x 200 sheet, one cell fixed at 100 x 100.
+    let src = Document::open(Arc::new(pdf(&[(100, 100, "1 0 0 rg 0 0 100 100 re f")]))).unwrap();
+    let spec = StepRepeat { cell: Some((200.0, 200.0)), scale: 0.5, ..StepRepeat::new((200.0, 200.0)) };
+    let out = impose_document(&src, &spec, Content::Document).expect("impose");
+    let p = render(&out, 0);
+    let at = |fx: f64, fy: f64| rgb(&p, (p.width as f64 * fx) as usize, (p.height as f64 * fy) as usize);
+    assert_eq!(at(0.5, 0.5), RED, "the scaled page covers the middle");
+    assert_eq!(at(0.4, 0.5), RED, "the half-size page spans 50 to 150 pt, so 40 % across is still inside it");
+    assert_ne!(at(0.1, 0.5), RED, "but 10 % across is outside it: the page no longer fills its cell");
+    assert_ne!(at(0.5, 0.9), RED);
+}

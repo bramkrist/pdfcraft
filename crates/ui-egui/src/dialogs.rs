@@ -1982,8 +1982,16 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         && let Some((i, id)) = app.active_ids()
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let edit = app.boxes_draft.edit(app.views[i].current, count);
-        app.apply_edit(edit);
+        let current = app.views[i].current;
+        let white = app.boxes_draft.white && app.boxes_draft.which == pdfcraft_engine::PageBox::Crop;
+        let edit = if white {
+            crate::pageboxes::white_margins_edit(app, id, &app.boxes_draft.pages(current, count))
+        } else {
+            Some(app.boxes_draft.edit(current, count))
+        };
+        if let Some(edit) = edit {
+            app.apply_edit(edit);
+        }
         app.boxes_draft.seeded = None;
     }
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {

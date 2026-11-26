@@ -57,6 +57,8 @@ pub struct Job {
     pub copies: Option<usize>,
     /// Step & repeat: turn whole rows a quarter turn where that fits more copies.
     pub rotate: Option<bool>,
+    /// Step & repeat / n-up / cut & stack: page scale in percent (default 100).
+    pub scale_percent: Option<f64>,
     /// `best`: try the sheet both ways round and keep the one with more copies per sheet.
     pub sheet_orientation: Option<String>,
     /// Booklet: `saddle` (default), `perfect` or `continuous`.
@@ -201,6 +203,9 @@ fn step_repeat(job: &Job, fill: Fill) -> Result<StepRepeat, String> {
         Some(d) => return Err(bad(format!("unknown duplex {d:?}"))),
     };
     s.rotate = job.rotate.unwrap_or(false);
+    if let Some(pct) = job.scale_percent {
+        s.scale = pct / 100.0;
+    }
     s.marks = marks(job)?;
     Ok(s)
 }

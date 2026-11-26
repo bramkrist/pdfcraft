@@ -26,13 +26,15 @@ pub struct BoxesDraft {
     pub unit: Unit,
     pub margins: [f64; 4],
     pub range: Range,
+    /// Crop to what is drawn on the pages (Acrobat's Remove White Margins) instead of the margins.
+    pub white: bool,
     /// The draft was seeded from this page and box (re-seed when either changes).
     pub seeded: Option<(usize, PageBox)>,
 }
 
 impl Default for BoxesDraft {
     fn default() -> Self {
-        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, seeded: None }
+        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, white: false, seeded: None }
     }
 }
 
@@ -50,6 +52,33 @@ impl BoxesDraft {
         let spec =
             if self.margins.iter().all(|m| *m == 0.0) && self.which != PageBox::Media { BoxSpec::Remove } else { BoxSpec::Margins(self.margins) };
         Edit::SetPageBox { pages: self.pages(current, count), which: self.which, spec }
+    }
+}
+
+/// The edit that crops `pages` (0-based) to what is drawn on them, or `None` (and a notice) when
+/// nothing could be cropped.
+pub(crate) fn white_margins_edit(app: &mut PdfCraftApp, id: pdfcraft_engine::DocId, pages: &[usize]) -> Option<Edit> {
+    let doc = app.session.get(id)?;
+    let infos = doc.info.pages.clone();
+    let config = app
+        .session
+        .render_config(id)
+        .unwrap_or_else(|| pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() });
+    let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), config);
+    match pdfcraft_render::content_boxes(&mut renderer, &infos, pages, 0.0) {
+        Ok((boxes, _)) if !boxes.is_empty() => {
+            let edits =
+                boxes.into_iter().map(|(page, r)| Edit::SetPageBox { pages: vec![page], which: PageBox::Crop, spec: BoxSpec::Rect(r) }).collect();
+            Some(Edit::Batch { label: "Remove white margins".into(), edits })
+        }
+        Ok(_) => {
+            app.notify_tr("Nothing is drawn on these pages, so there are no white margins to remove");
+            None
+        }
+        Err(e) => {
+            app.notify(e);
+            None
+        }
     }
 }
 
@@ -132,6 +161,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 if ui.button(tl!("Set to zero")).clicked() {
                     d.margins = [0.0; 4];
                 }
+                ui.end_row();
+                ui.label("");
+                // Only the crop box is cropped to the content, as in Acrobat.
+                let on = d.which == PageBox::Crop;
+                ui.add_enabled(on, widgets::checkbox(&mut d.white, tl!("Remove white margins")));
                 ui.end_row();
                 ui.label(tl!("Pages"));
                 ui.vertical(|ui| {
