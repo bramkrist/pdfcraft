@@ -172,3 +172,54 @@ summary { cursor: pointer; font-weight: 600; }
 
 .tpl { border-top: 1px solid var(--line); margin-top: var(--sp-3); padding-top: var(--sp-3); }
 .tpl .l { margin-bottom: var(--sp-1); }
+
+/* Combine panel */
+.mlist { list-style: none; margin: var(--sp-3) 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.mlist:empty { display: none; }
+.mlist li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb { width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); cursor: pointer; font-size: 12px; line-height: 1; }
+.mb:hover { background: var(--navy-050); }
+#mergepanel #mopts { margin-top: var(--sp-3); }
+#mergepanel .hint { margin: var(--sp-3) 0 0; font-size: 13px; }
+
+/* Page rail (thumbnails of the active tab) */
+.rail { overflow-y: auto; overscroll-behavior: contain; background: #F1EFE8; border-right: 1px solid var(--line); padding: var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); }
+.rp { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; border: 2px solid transparent; border-radius: var(--r-2); background: none; cursor: pointer; flex: none; }
+.rp:hover { background: rgba(255,255,255,.6); }
+.rp.on { border-color: var(--navy); background: var(--navy-050); }
+.rpimg { display: block; background: #fff center / contain no-repeat; box-shadow: 0 1px 3px rgba(0,25,51,.18); }
+.rpn { font-size: 12px; color: var(--muted); }
+.rp.on .rpn { color: var(--navy); font-weight: 600; }
+
+/* Desktop shell: one screen, no page scroll. Rail on the left, preview in the middle, options on the right. */
+@media (min-width: 901px) {
+  html, body { height: 100%; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  .top { position: static; height: 44px; padding: 0 var(--sp-4); flex: none; }
+  .tabs { flex: none; padding: 6px var(--sp-4) 0; }
+  .layout { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 0; gap: 0; grid-template-columns: 136px minmax(0, 1fr) 350px; grid-template-areas: "rail stage side"; align-items: stretch; }
+  .layout > .rail { grid-area: rail; }
+  .layout > aside { grid-area: side; position: static; max-height: none; overflow-y: auto; padding: var(--sp-3); border-left: 1px solid var(--line); }
+  .layout > .stage { grid-area: stage; position: static; max-height: none; overflow: hidden; display: flex; flex-direction: column; padding: var(--sp-3) var(--sp-4); }
+  .stage > * { flex: none; }
+  .stage > .canvaswrap { flex: 1 1 0; min-height: 0; position: relative; display: block; padding: 0; }
+  .canvaswrap canvas { position: absolute; inset: 0; margin: auto; max-width: calc(100% - 24px); max-height: calc(100% - 24px); }
+  .stage > .org:not([hidden]) { flex: 1 1 0; min-height: 0; overflow: auto; }
+  .stage > .actions { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--line); }
+  .stage .big { font-size: 26px; }
+}
+@media (max-width: 900px) { .rail { display: none; } }
+#mergepanel > summary { font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); font-weight: 600; cursor: pointer; }
+#mergepanel[open] > summary { margin-bottom: var(--sp-3); }
+@media (min-width: 901px) { .drop { padding: var(--sp-4); } }
+
+/* Bulk copies (page editor) */
+.bulk { border: 1px solid var(--line-strong); border-radius: var(--r-3); padding: var(--sp-3); margin-bottom: var(--sp-3); background: var(--surface); }
+.bulk[hidden] { display: none; }
+.bulkgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: var(--sp-2); max-height: 260px; overflow-y: auto; margin: var(--sp-2) 0; padding: var(--sp-1); }
+.bk { display: flex; flex-direction: column; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-2); padding: var(--sp-2); }
+.bkbox { height: 80px; display: grid; place-items: center; }
+.bk label { width: 100%; text-align: center; }
+.bkl { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bkn { width: 100%; text-align: center; padding: 4px 6px; }
