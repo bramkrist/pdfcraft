@@ -49,6 +49,7 @@ root.innerHTML = `
 </header>
 <nav class="tabs" id="tabs" aria-label="Dokumen"></nav>
 <div class="layout">
+  <nav class="rail" id="rail" aria-label="Halaman tab ini"></nav>
   <aside>
     <div id="nobanner" class="banner" hidden></div>
     <section class="panel">
@@ -56,6 +57,18 @@ root.innerHTML = `
       <label class="drop" id="drop"><strong>Buka PDF</strong><span>Pilih atau tarik ke sini. Diproses di komputer ini, tidak di-upload.</span><input id="file" type="file" accept="application/pdf,.pdf"></label>
       <div class="fileinfo" id="fileinfo"></div>
     </section>
+    <details class="panel" id="mergepanel">
+      <summary>Gabung jadi 1 PDF</summary>
+      <label class="drop" id="mdrop"><strong>Pilih banyak file</strong><span>PDF atau gambar (JPG, PNG, WebP). Bisa dipilih berkali-kali, urutan diatur di bawah.</span><input id="mfiles" type="file" multiple accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,image/gif,image/bmp"></label>
+      <ol class="mlist" id="mlist"></ol>
+      <div class="field" id="mopts" hidden>
+        <div><label class="l" for="m-page">Ukuran halaman gambar</label><select id="m-page"><option value="fit">Sesuai gambar</option><option value="A4" selected>A4</option><option value="A3">A3</option><option value="A5">A5</option></select></div>
+        <div><label class="l" for="m-margin">Margin (mm)</label><input type="number" id="m-margin" value="0" min="0" step="1"></div>
+        <div id="m-dpiwrap"><label class="l" for="m-dpi">DPI gambar</label><input type="number" id="m-dpi" value="300" min="36" step="1"></div>
+      </div>
+      <div class="actions" style="margin-top:12px"><button type="button" class="btn small" id="mgo" disabled>Gabung ke tab baru</button><button type="button" class="btn ghost small" id="mclear" disabled>Kosongkan</button></div>
+      <p class="hint" id="mhint">JPEG ditanam apa adanya (warna dan piksel tidak berubah). PNG/WebP ditulis lossless; transparan jadi putih.</p>
+    </details>
     <section class="panel" id="pfpanel" hidden>
       <h2>Cek file (preflight)</h2>
       <div id="pf"></div>
@@ -83,6 +96,7 @@ root.innerHTML = `
         <button type="button" class="btn ghost small" data-o="rotl" title="Putar kiri (Shift+R)">⟲</button>
         <button type="button" class="btn ghost small" data-o="rotr" title="Putar kanan (R)">⟳</button>
         <button type="button" class="btn ghost small" data-o="dup" title="Duplikat (Ctrl+D)">Duplikat</button>
+        <button type="button" class="btn ghost small" data-o="bulk" title="Isi jumlah salinan tiap halaman sekaligus (mis. hal. 1 x10, hal. 2 x12)">Salin massal…</button>
         <button type="button" class="btn ghost small" data-o="del" title="Hapus (Del)">Hapus</button>
         <button type="button" class="btn ghost small" data-o="left" title="Geser ke kiri">◀</button>
         <button type="button" class="btn ghost small" data-o="right" title="Geser ke kanan">▶</button>
@@ -96,6 +110,16 @@ root.innerHTML = `
         <input type="text" id="o-range" placeholder="semua / 1-3,5" style="width:140px">
         <button type="button" class="btn ghost small" data-o="insert">Sisipkan</button>
         <span class="hint" id="orginfo"></span>
+      </div>
+      <div class="bulk" id="bulk" hidden>
+        <div class="orgbar"><b>Salin massal</b><span class="hint">Isi jumlah salinan tiap halaman. 0 = halaman itu dibuang. Contoh: hal. 1 × 10, hal. 2 × 12, supaya muat banyak di satu lembar A3.</span></div>
+        <div class="bulkgrid" id="bulkgrid"></div>
+        <div class="orgbar">
+          <label class="l" for="b-all" style="margin:0">Samakan semua</label><input type="number" id="b-all" min="0" max="999" value="1" style="width:76px"><button type="button" class="btn ghost small" data-b="all">Isi</button>
+          <label class="l" for="b-order" style="margin:0 0 0 8px">Urutan</label><select id="b-order"><option value="block">Per halaman (1,1,1, 2,2,2)</option><option value="round">Bergilir (1,2, 1,2, 1,2)</option></select>
+          <span class="hint" id="b-total"></span>
+          <button type="button" class="btn small" data-b="apply">Terapkan</button><button type="button" class="btn ghost small" data-b="close">Tutup</button>
+        </div>
       </div>
       <div class="orggrid" id="orggrid" tabindex="0" aria-label="Halaman"></div>
       <p class="hint">Klik pilih · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+klik pilih banyak · tarik untuk pindah · <kbd>R</kbd> putar · <kbd>Del</kbd> hapus · <kbd>Ctrl+C</kbd>/<kbd>Ctrl+V</kbd> salin · <kbd>Ctrl+Z</kbd> batal. Begitu pindah ke Layout (atau klik Terapkan), perubahan jadi tab baru dan layout memakai urutan baru itu. Link, komentar & bookmark ikut halamannya.</p>
@@ -568,6 +592,79 @@ async function openFile(f) {
   }
 }
 
+// ---- combine: several PDFs and images into one PDF ------------------------------------------
+const merge = { items: [], seq: 0 };
+const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+const isImgFile = (f) => /^image\/(jpeg|png|webp|gif|bmp)$/.test(f.type) || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.name);
+
+function renderMerge() {
+  const it = merge.items;
+  $('mlist').innerHTML = it.map((x, i) => `<li data-i="${i}"><span class="mname" title="${esc(x.file.name)}">${esc(x.file.name)}</span><span class="tagchip">${x.img ? 'gambar' : 'PDF'}</span><button type="button" class="mb" data-mv="up" aria-label="Naik">▲</button><button type="button" class="mb" data-mv="down" aria-label="Turun">▼</button><button type="button" class="mb" data-mv="del" aria-label="Buang">×</button></li>`).join('');
+  const hasImg = it.some((x) => x.img);
+  $('mopts').hidden = !hasImg;
+  $('m-dpiwrap').hidden = $('m-page').value !== 'fit';
+  $('mgo').disabled = state.busy || it.length === 0 || (it.length === 1 && !it[0].img);
+  $('mclear').disabled = it.length === 0;
+}
+
+function addMergeFiles(files) {
+  let skipped = 0;
+  for (const f of files) {
+    if (isPdfFile(f)) merge.items.push({ id: ++merge.seq, file: f, img: false });
+    else if (isImgFile(f)) merge.items.push({ id: ++merge.seq, file: f, img: true });
+    else skipped++;
+  }
+  if (skipped) say(`${skipped} file dilewati: hanya PDF dan gambar (JPG, PNG, WebP, GIF, BMP).`, true);
+  if (merge.items.length) $('mergepanel').open = true;
+  renderMerge();
+}
+
+async function mergeNow() {
+  if (!state.engine) return say('Mesin belum siap.', true);
+  const items = merge.items.slice();
+  if (!items.length) return;
+  state.busy = true;
+  renderMerge();
+  draw();
+  say('Menggabung…');
+  await new Promise((r) => setTimeout(r, 20));
+  let note = null;
+  try {
+    const mod = await import(A('combine.js'));
+    const opts = { page: $('m-page').value, marginMm: Number($('m-margin').value) || 0, dpi: Number($('m-dpi').value) || 300 };
+    const files = [];
+    for (const x of items) {
+      if (x.img) {
+        try { files.push(await mod.imageToPdf(x.file, opts)); } catch (e) { throw new Error(`${x.file.name}: ${String(e.message || e)}`); }
+      } else files.push(new Uint8Array(await x.file.arrayBuffer()));
+    }
+    const plan = [];
+    for (let i = 0; i < files.length; i++) {
+      let n;
+      try { n = JSON.parse(state.engine.pageSizes(files[i].slice())).length; } catch (e) { throw new Error(`${items[i].file.name}: ${String(e.message || e)}`); }
+      for (let p = 0; p < n; p++) plan.push({ src: i, page: p, rotate: 0 });
+    }
+    const extras = files.slice(1);
+    const buf = new Uint8Array(extras.reduce((n, x) => n + x.length, 0));
+    let at = 0;
+    for (const x of extras) { buf.set(x, at); at += x.length; }
+    const out = state.engine.assemblePages(files[0].slice(), buf, new Uint32Array(extras.map((x) => x.length)), JSON.stringify(plan));
+    const nd = addDoc(`Gabungan ${items.length} file`, out, ['GABUNG']);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      note = [`Tab baru "${nd.name}": ${plan.length} halaman dari ${items.length} file. Cek urutannya di panel kiri, lalu Download tab ini.`, false, true];
+    }
+  } catch (e) {
+    note = ['Gabung gagal: ' + String(e.message || e), true];
+  } finally {
+    state.busy = false;
+    renderMerge();
+    recompute();
+    if (note) say(...note);
+  }
+}
+
 // ---- layout + preview ---------------------------------------------------------------------
 let previewTimer = null;
 let preview = null; // { key, bytes }
@@ -599,6 +696,7 @@ function pageCount() {
 function draw() {
   const d = activeDoc();
   const L = state.layout;
+  renderRail();
   $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   const blocked = !!(d && d.pf && d.pf.overall === 'fail');
   $('ackwrap').hidden = !blocked;
@@ -657,6 +755,44 @@ function draw() {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(drawPicture, 120);
   }
+}
+
+// Left rail (Acrobat-style page thumbnails of the active tab). Thumbnails render lazily, one at a time.
+let railIO = null;
+let railChain = Promise.resolve();
+function renderRail() {
+  const rail = $('rail');
+  const d = activeDoc();
+  if (!d) {
+    if (railIO) railIO.disconnect();
+    rail.innerHTML = '';
+    rail.dataset.key = '';
+    return;
+  }
+  const key = `${d.id}:${d.sizes.length}`;
+  if (rail.dataset.key !== key) {
+    rail.dataset.key = key;
+    if (railIO) railIO.disconnect();
+    rail.innerHTML = d.sizes.map(([w, h], i) => `<button type="button" class="rp" data-p="${i}" aria-label="Halaman ${i + 1}"><span class="rpimg" style="width:${w >= h ? 100 : Math.max(30, Math.round((100 * w) / h))}%;aspect-ratio:${w} / ${h}"></span><span class="rpn">${i + 1}</span></button>`).join('');
+    railIO = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        railIO.unobserve(en.target);
+        const el = en.target.querySelector('.rpimg');
+        const page = Number(en.target.dataset.p);
+        railChain = railChain.then(async () => {
+          try {
+            const url = await thumb(d.id, page);
+            if (url && el.isConnected) el.style.backgroundImage = `url(${url})`;
+          } catch (_) { /* thumbnail is optional */ }
+        });
+      }
+    }, { root: rail, rootMargin: '300px 0px' });
+    rail.querySelectorAll('.rp').forEach((b) => railIO.observe(b));
+  }
+  rail.querySelectorAll('.rp').forEach((b) => b.classList.toggle('on', state.view === 'doc' && Number(b.dataset.p) === state.sheet));
+  const on = rail.querySelector('.rp.on');
+  if (on) on.scrollIntoView({ block: 'nearest' });
 }
 
 function navText() {
@@ -1357,6 +1493,8 @@ function renderOrg() {
     </figure>`;
   }).join('');
   $('orginfo').textContent = o.sel.size ? `${o.sel.size} dipilih` : '';
+  $('bulk').hidden = !bulk.open;
+  if (bulk.open) renderBulk(o);
   // Fill thumbnails, cached per source page.
   grid.querySelectorAll('.pgimg[data-key]').forEach((el) => {
     const key = el.dataset.key;
@@ -1370,9 +1508,9 @@ function renderOrg() {
 }
 
 /** Size of a thumbnail so that, turned, it fits a 112 x 150 box. */
-function thumbStyle(w, h, turned) {
+function thumbStyle(w, h, turned, boxW = 112, boxH = 150) {
   const [bw, bh] = turned ? [h, w] : [w, h];
-  const k = Math.min(112 / bw, 150 / bh);
+  const k = Math.min(boxW / bw, boxH / bh);
   return `width:${Math.round(w * k)}px;height:${Math.round(h * k)}px;`;
 }
 
@@ -1380,10 +1518,76 @@ function orgSelected(o) {
   return [...o.sel].sort((a, b) => a - b);
 }
 
+// ---- bulk copies: a number of copies for every page of the editor ---------------------------
+const bulk = { open: false, counts: new Map() };
+const BULK_MAX_EACH = 999;
+const BULK_MAX_TOTAL = 5000;
+const bulkCount = (it) => Math.max(0, Math.min(BULK_MAX_EACH, Math.floor(Number(bulk.counts.get(it.key) ?? 1)) || 0));
+
+function bulkTotal(o) {
+  return o.items.reduce((n, it) => n + bulkCount(it), 0);
+}
+
+function renderBulk(o) {
+  const grid = $('bulkgrid');
+  grid.innerHTML = o.items.map((it, i) => {
+    const [w, h] = orgSize(it);
+    const turned = it.rot % 180 !== 0;
+    const src = state.docs.find((x) => x.id === it.doc);
+    const label = it.blank ? 'kosong' : src && src.id === activeDoc().id ? `hal. ${it.page + 1}` : `${esc(src ? src.name : '?')} · ${it.page + 1}`;
+    return `<div class="bk" data-i="${i}">
+      <div class="bkbox"><div class="pgimg ${it.blank ? 'blank' : ''}" style="${thumbStyle(w, h, turned, 64, 80)}transform:rotate(${it.rot}deg)" data-key="${it.blank ? '' : `${it.doc}:${it.page}`}"></div></div>
+      <label><span class="bkl">${i + 1} · ${label}</span><input type="number" class="bkn" min="0" max="${BULK_MAX_EACH}" step="1" value="${bulkCount(it)}" data-key="${it.key}" aria-label="Jumlah salinan halaman ${i + 1}"></label>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.pgimg[data-key]').forEach((el) => {
+    const key = el.dataset.key;
+    if (!key) return;
+    const [docId, page] = key.split(':').map(Number);
+    const t = thumb(docId, page);
+    const set = (url) => { el.style.backgroundImage = `url(${url})`; };
+    if (typeof t === 'string') set(t);
+    else if (t) t.then(set).catch(() => {});
+  });
+  bulkInfo(o);
+}
+
+function bulkInfo(o) {
+  const total = bulkTotal(o);
+  $('b-total').textContent = `Hasil: ${total} halaman (dari ${o.items.length})`;
+}
+
+function bulkApply() {
+  const d = activeDoc();
+  if (!d) return;
+  const o = orgOf(d);
+  const counts = o.items.map(bulkCount);
+  const total = counts.reduce((n, c) => n + c, 0);
+  if (!total) return say('Semua jumlah 0. Minimal satu halaman harus tersisa.', true);
+  if (total > BULK_MAX_TOTAL) return say(`Terlalu banyak: ${total} halaman. Batas ${BULK_MAX_TOTAL}.`, true);
+  orgSnapshot(o);
+  const out = [];
+  if ($('b-order').value === 'round') {
+    for (let r = 0; r < Math.max(...counts); r++) o.items.forEach((it, i) => { if (r < counts[i]) out.push({ ...it, key: ++orgSeq }); });
+  } else {
+    o.items.forEach((it, i) => { for (let k = 0; k < counts[i]; k++) out.push({ ...it, key: ++orgSeq }); });
+  }
+  o.items = out;
+  o.sel.clear();
+  bulk.counts.clear();
+  bulk.open = false;
+  draw();
+  say(`${out.length} halaman di editor (dari ${counts.length}). Klik Terapkan untuk jadi tab baru, atau lanjut ke Layout.`, false, true);
+}
+
 function orgAction(what) {
   const d = activeDoc();
   if (!d) return;
   const o = orgOf(d);
+  if (what === 'bulk') {
+    bulk.open = !bulk.open;
+    return draw();
+  }
   const sel = orgSelected(o);
   const after = sel.length ? sel[sel.length - 1] + 1 : o.items.length;
   if (what === 'undo') {
@@ -1765,6 +1969,14 @@ $('tabs').addEventListener('click', (e) => {
     else recompute();
   }
 });
+$('rail').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-p]');
+  if (!b) return;
+  if (state.view === 'pages' && !(await leavePages('doc'))) return;
+  state.view = 'doc';
+  state.sheet = Number(b.dataset.p);
+  draw();
+});
 $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.sheet - 1); draw(); });
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
 $('apply').addEventListener('click', () => (state.view === 'pages' ? applyPages() : apply()));
@@ -1792,6 +2004,46 @@ document.addEventListener('keydown', manualKey);
 $('download').addEventListener('click', () => exportFile(false));
 $('saveas').addEventListener('click', () => exportFile(true));
 
+$('mfiles').addEventListener('change', (e) => { addMergeFiles(Array.from(e.target.files)); e.target.value = ''; });
+const mdrop = $('mdrop');
+['dragenter', 'dragover'].forEach((t) => mdrop.addEventListener(t, (e) => { e.preventDefault(); mdrop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((t) => mdrop.addEventListener(t, (e) => { e.preventDefault(); mdrop.classList.remove('over'); }));
+mdrop.addEventListener('drop', (e) => addMergeFiles(Array.from(e.dataTransfer.files)));
+$('mlist').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mv]');
+  const li = e.target.closest('li[data-i]');
+  if (!b || !li) return;
+  const i = Number(li.dataset.i);
+  const it = merge.items;
+  if (b.dataset.mv === 'del') it.splice(i, 1);
+  else if (b.dataset.mv === 'up' && i > 0) [it[i - 1], it[i]] = [it[i], it[i - 1]];
+  else if (b.dataset.mv === 'down' && i < it.length - 1) [it[i + 1], it[i]] = [it[i], it[i + 1]];
+  renderMerge();
+});
+$('m-page').addEventListener('change', renderMerge);
+$('mgo').addEventListener('click', mergeNow);
+$('mclear').addEventListener('click', () => { merge.items = []; renderMerge(); });
+renderMerge();
+$('bulk').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-b]');
+  if (!b) return;
+  const d = activeDoc();
+  if (!d) return;
+  if (b.dataset.b === 'close') { bulk.open = false; draw(); }
+  else if (b.dataset.b === 'apply') bulkApply();
+  else if (b.dataset.b === 'all') {
+    const v = Math.max(0, Math.min(BULK_MAX_EACH, Math.floor(Number($('b-all').value)) || 0));
+    for (const it of orgOf(d).items) bulk.counts.set(it.key, v);
+    renderBulk(orgOf(d));
+  }
+});
+$('bulk').addEventListener('input', (e) => {
+  const inp = e.target.closest('.bkn');
+  const d = activeDoc();
+  if (!inp || !d) return;
+  bulk.counts.set(Number(inp.dataset.key), Number(inp.value));
+  bulkInfo(orgOf(d));
+});
 orgWire();
 renderOptions();
 loadEngine().then(draw);
