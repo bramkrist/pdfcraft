@@ -314,6 +314,14 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_repeat" => {
+                let counts = a
+                    .ints("counts")?
+                    .into_iter()
+                    .map(|c| usize::try_from(c).map_err(|_| ToolError::InvalidArgs("counts must not be negative".into())))
+                    .collect::<Result<Vec<_>>>()?;
+                self.apply(&a, Edit::RepeatPages { counts })?
+            }
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,

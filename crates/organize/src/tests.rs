@@ -3985,3 +3985,37 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
 }
+
+#[test]
+fn repeat_pages_copies_each_page_the_asked_number_of_times_in_place() {
+    let mut d = doc_b();
+    repeat_pages(&mut d, &[3, 2]).unwrap();
+    assert_eq!(labels(&full_roundtrip(&d)), ["B1", "B1", "B1", "B2", "B2"]);
+    let ps = pages(&d).unwrap();
+    for (i, p) in ps.iter().enumerate() {
+        assert!(ps.iter().skip(i + 1).all(|q| q.obj != p.obj), "every page object appears once");
+    }
+}
+
+#[test]
+fn repeat_pages_with_zero_removes_the_page_and_one_leaves_it() {
+    let mut d = doc_b();
+    repeat_pages(&mut d, &[0, 2]).unwrap();
+    assert_eq!(labels(&full_roundtrip(&d)), ["B2", "B2"]);
+    let mut d = doc_b();
+    repeat_pages(&mut d, &[1, 1]).unwrap();
+    assert_eq!(labels(&full_roundtrip(&d)), ["B1", "B2"]);
+    let mut d = doc_c();
+    repeat_pages(&mut d, &[0, 3]).unwrap();
+    assert_eq!(labels(&full_roundtrip(&d)), ["C2", "C2", "C2"]);
+}
+
+#[test]
+fn repeat_pages_refuses_a_wrong_count_list_no_pages_and_too_many() {
+    let mut d = doc_b();
+    assert!(repeat_pages(&mut d, &[1]).is_err());
+    assert!(matches!(repeat_pages(&mut d, &[0, 0]), Err(OrganizeError::WouldRemoveAllPages)));
+    assert!(repeat_pages(&mut d, &[MAX_REPEAT_PAGES, 1]).is_err());
+    assert!(repeat_pages(&mut d, &[usize::MAX, 1]).is_err());
+    assert_eq!(labels(&d), ["B1", "B2"], "nothing changed");
+}

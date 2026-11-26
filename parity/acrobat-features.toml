@@ -2893,6 +2893,19 @@ tools = ["page_duplicate"]
 evidence = ["crates/ui-egui/tests/it/pageboxes.rs::duplicate_pages_copies_the_current_page", "crates/ui-egui/tests/it/editing.rs::dragging_with_the_copy_modifier_copies_the_pages_into_the_gap", "crates/ui-egui/tests/it/control.rs::ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page", "crates/organize/src/tests.rs::duplicate_pages_inserts_copies_after_the_last", "crates/organize/src/tests.rs::duplicate_pages_at_inserts_the_copies_there", "crates/automation/tests/it/automation.rs::page_duplicate_at_inserts_the_copies_there"]
 notes = "copies share fonts and images with the originals; Ctrl-drag (Option on macOS) in the page grid drops the copies at the gap instead of moving the pages, with a \"+\" badge and the copies selected (#2997); page_duplicate takes `at` for where the first copy goes (left out: after the last of them)"
 
+
+[[feature]]
+id = "organize.repeat-pages"
+title = "Repeat pages: a different number of copies of each page in one go"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "partial"
+commands = ["page.repeat"]
+tools = ["page_repeat"]
+evidence = ["crates/organize/src/tests.rs::repeat_pages_copies_each_page_the_asked_number_of_times_in_place", "crates/automation/tests/it/automation.rs::page_repeat_makes_the_asked_copies_of_each_page_in_place", "crates/ui-egui/tests/it/pageboxes.rs::repeat_pages_dialog_makes_the_chosen_number_of_copies_of_each_page", "crates/ui-egui/tests/it/pageboxes.rs::repeat_pages_dialog_refuses_to_remove_every_page"]
+notes = "Page 1 x10, page 2 x12 and so on, to fill a sheet before imposing: a count per page (0 removes the page), the copies right after their page, one undo step, at most 10,000 pages in all. A dialog lists every page with its count and a Set-all box. Not Acrobat: Acrobat has no such command (an Acrobat user duplicates pages one at a time or with a script); this answers a press-room request. Not yet: counts from a selection or a typed range, a count column in the thumbnail grid."
+
 [[feature]]
 id = "organize.reverse-pages"
 title = "Reverse page order"
@@ -8211,8 +8224,8 @@ milestone = "M10"
 status = "partial"
 commands = []
 tools = ["doc_booklet"]
-evidence = ["crates/impose/src/booklet_tests.rs::saddle_stitch_of_eight_pages_pairs_first_with_last", "crates/impose/src/booklet_tests.rs::every_page_lands_once_and_every_sheet_side_adds_up_for_any_saddle_size", "crates/impose/src/booklet_tests.rs::perfect_binding_makes_saddle_signatures_read_one_after_another", "crates/impose/tests/pdf.rs::a_saddle_stitched_booklet_puts_each_page_where_the_fold_needs_it", "crates/automation/tests/it/automation.rs::making_a_booklet_through_tools"]
-notes = "Two pages per sheet side in fold order, written through pdfcraft-print's sheet writer so vector pages are never rasterised. Saddle (padded to a multiple of 4 with blanks at the end), perfect-bound signatures (last signature padded to full or to a multiple of 4), continuous; automatic or chosen sheet, one uniform scale from the largest page (or 100 % with a refusal when it does not fit), centre or spine alignment, edge space, right-to-left binding. Output is front/back sheet sides in order for duplex printing; checked by arithmetic properties over 4..64 pages and by rendering a four-page saddle booklet. Creep (creep_mm): the k-th sheet of each folded signature moves k * creep towards the spine and is clipped at it (booklet_tests::creep_moves_inner_sheets_towards_the_spine_and_clips_at_it). Not yet: cut stacks, separate front and back files / flipped backs, crop marks, bleed generation, a dialog and command (headless tool only), page numbers and covers."
+evidence = ["crates/impose/tests/pdf.rs::two_booklets_on_one_sheet_repeat_every_side_of_the_booklet_and_keep_the_big_sheet_portrait", "crates/impose/src/tests.rs::two_booklet_leaves_stack_on_a_portrait_sheet_when_they_fit", "crates/ui-egui/src/dialogs/impose_ui.rs::two_booklets_per_sheet_summarise_the_press_sheet_and_refuse_a_sheet_too_small", "crates/automation/tests/it/automation.rs::two_booklets_per_sheet_through_tools", "crates/impose/src/booklet_tests.rs::saddle_stitch_of_eight_pages_pairs_first_with_last", "crates/impose/src/booklet_tests.rs::every_page_lands_once_and_every_sheet_side_adds_up_for_any_saddle_size", "crates/impose/src/booklet_tests.rs::perfect_binding_makes_saddle_signatures_read_one_after_another", "crates/impose/tests/pdf.rs::a_saddle_stitched_booklet_puts_each_page_where_the_fold_needs_it", "crates/automation/tests/it/automation.rs::making_a_booklet_through_tools"]
+notes = "Two booklets per press sheet (two_up_sheet in doc_booklet; \"Two booklets on each press sheet\" in the Create booklet dialog): each booklet sheet side is laid twice on the press sheet, stacked on a portrait sheet when the pair fits (the sheet is never turned for room, so front and back stay behind each other), else side by side on the landscape one; a pair that does not fit is refused. Two pages per sheet side in fold order, written through pdfcraft-print's sheet writer so vector pages are never rasterised. Saddle (padded to a multiple of 4 with blanks at the end), perfect-bound signatures (last signature padded to full or to a multiple of 4), continuous; automatic or chosen sheet, one uniform scale from the largest page (or 100 % with a refusal when it does not fit), centre or spine alignment, edge space, right-to-left binding. Output is front/back sheet sides in order for duplex printing; checked by arithmetic properties over 4..64 pages and by rendering a four-page saddle booklet. Creep (creep_mm): the k-th sheet of each folded signature moves k * creep towards the spine and is clipped at it (booklet_tests::creep_moves_inner_sheets_towards_the_spine_and_clips_at_it). Not yet: cut stacks, separate front and back files / flipped backs, crop marks, bleed generation, page numbers and covers."
 
 [[feature]]
 id = "print.generate-bleed"
@@ -8221,10 +8234,10 @@ area = "L"
 tier = "P2"
 milestone = "M10"
 status = "partial"
-commands = []
+commands = ["impose.add_bleed"]
 tools = ["doc_bleed"]
-evidence = ["crates/impose/src/bleed_tests.rs::the_parts_tile_the_sheet_for_any_mix_of_sides", "crates/impose/src/bleed_tests.rs::a_scaled_bleed_enlarges_the_page_about_its_centre_to_cover_the_new_edge", "crates/impose/tests/pdf.rs::a_mirrored_bleed_continues_the_artwork_as_its_own_reflection_and_sets_the_trim_box", "crates/automation/tests/it/automation.rs::adding_bleed_through_tools"]
-notes = "Pages grow by a uniform or per-side bleed and get a TrimBox at the old edge and a BleedBox around the new page. Mirror reflects each edge strip outward (corners across both edges); scale enlarges the page about its centre. Both are placements of the original page form written through pdfcraft-print's sheet writer, so images, fonts and colour spaces are not rewritten or rasterised; the mirrored strips are checked to tile the new page exactly and by rendering. Not yet: a dialog and command (headless tool only), taking an existing TrimBox as the edge, extending edge colours, removing or cropping an existing bleed, per-page amounts, and honouring a page rotation that differs between pages."
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::add_bleed_dialog_opens_a_new_document_with_the_pages_grown_by_the_bleed", "crates/ui-egui/src/dialogs/bleed_ui.rs::each_side_on_its_own_replaces_the_single_amount", "crates/impose/src/bleed_tests.rs::the_parts_tile_the_sheet_for_any_mix_of_sides", "crates/impose/src/bleed_tests.rs::a_scaled_bleed_enlarges_the_page_about_its_centre_to_cover_the_new_edge", "crates/impose/tests/pdf.rs::a_mirrored_bleed_continues_the_artwork_as_its_own_reflection_and_sets_the_trim_box", "crates/automation/tests/it/automation.rs::adding_bleed_through_tools"]
+notes = "Imposing ▸ Add bleed… in the app (one amount or each side, mirror or scale; opens a new _BLEED document). Pages grow by a uniform or per-side bleed and get a TrimBox at the old edge and a BleedBox around the new page. Mirror reflects each edge strip outward (corners across both edges); scale enlarges the page about its centre. Both are placements of the original page form written through pdfcraft-print's sheet writer, so images, fonts and colour spaces are not rewritten or rasterised; the mirrored strips are checked to tile the new page exactly and by rendering. Not yet: a dialog and command (headless tool only), taking an existing TrimBox as the edge, extending edge colours, removing or cropping an existing bleed, per-page amounts, and honouring a page rotation that differs between pages."
 
 [[feature]]
 id = "print.prepress-preflight"

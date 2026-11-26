@@ -280,6 +280,8 @@ impl PdfCraftApp {
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             impose_draft: Default::default(),
+            repeat_draft: Default::default(),
+            bleed_draft: Default::default(),
             marks_draft: Default::default(),
             unmarked_page: Default::default(),
             export_draft: Default::default(),

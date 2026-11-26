@@ -45,6 +45,11 @@ pub enum Edit {
         pages: Vec<usize>,
         at: Option<usize>,
     },
+    /// Page `i` appears `counts[i]` times, in place and in the same order (0 removes it): one
+    /// count per page, to fill a press sheet with many copies of a few pages.
+    RepeatPages {
+        counts: Vec<usize>,
+    },
     /// Replace Pages: the content of `pages` is replaced by `src_pages` of another PDF; the
     /// pages' links, comments and bookmarks stay.
     ReplacePages {

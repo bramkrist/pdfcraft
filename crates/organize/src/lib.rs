@@ -565,6 +565,45 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
     import_pages(doc, &src, &order, at.unwrap_or(last + 1)).map(|_| ())
 }
 
+/// The most pages [`repeat_pages`] will make.
+pub const MAX_REPEAT_PAGES: usize = 10_000;
+
+/// Make page `i` appear `counts[i]` times, in place and in the same order (1 keeps it as it is,
+/// 0 removes it): "page 1 ten times, page 2 twelve times", to fill a press sheet. The copies are
+/// independent pages, as for [`duplicate_pages`]. `counts` has one entry per page.
+pub fn repeat_pages(doc: &mut Document, counts: &[usize]) -> Result<(), OrganizeError> {
+    let n = page_count(doc)?;
+    if counts.len() != n {
+        return Err(OrganizeError::Invalid(format!("{} counts for {n} pages", counts.len())));
+    }
+    let total = counts.iter().try_fold(0usize, |a, c| a.checked_add(*c)).filter(|t| *t <= MAX_REPEAT_PAGES);
+    match total {
+        None => return Err(OrganizeError::Invalid(format!("more than {MAX_REPEAT_PAGES} pages"))),
+        Some(0) => return Err(OrganizeError::WouldRemoveAllPages),
+        Some(_) => {}
+    }
+    let src = doc.clone();
+    // From the last page back, so the positions of the pages before it stay what `counts` says.
+    for (i, &c) in counts.iter().enumerate().rev() {
+        if c > 1 {
+            import_pages(doc, &src, &vec![i; c - 1], i + 1)?;
+        }
+    }
+    // Pages with no copy go last: their positions moved by the copies made before them.
+    let mut gone = Vec::new();
+    let mut extra = 0usize;
+    for (i, &c) in counts.iter().enumerate() {
+        match c {
+            0 => gone.push(i + extra),
+            c => extra += c - 1,
+        }
+    }
+    if !gone.is_empty() {
+        delete_pages(doc, &gone)?;
+    }
+    Ok(())
+}
+
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
 /// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
 /// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.

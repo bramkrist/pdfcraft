@@ -2908,6 +2908,24 @@ fn page_duplicate_at_inserts_the_copies_there() {
 }
 
 #[test]
+fn page_repeat_makes_the_asked_copies_of_each_page_in_place() {
+    let dir = workdir("repeat");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_repeat", json!({ "doc": doc, "counts": [3, 0, 2] }));
+    assert_eq!(r["pages"], 5);
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 1", "Page 1", "Page 3", "Page 3"]);
+    // One count per page, none negative, and a page must stay.
+    assert!(
+        matches!(a.call("page_repeat", &json!({ "doc": doc, "counts": [1] })), Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))),
+        "one count per page"
+    );
+    assert!(matches!(a.call("page_repeat", &json!({ "doc": doc, "counts": [1, 1, 1, 1, -1] })), Err(ToolError::InvalidArgs(_))), "negative");
+    assert!(matches!(a.call("page_repeat", &json!({ "doc": doc, "counts": [0, 0, 0, 0, 0] })), Err(ToolError::Failed(_))), "all removed");
+    assert_eq!(page_text(&mut a, doc).len(), 5, "refused calls change nothing");
+}
+
+#[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");
     let mut a = auto(&dir);
@@ -5236,6 +5254,30 @@ fn making_a_booklet_through_tools() {
         json!({ "doc": doc, "sheet": "A4", "scale": false, "sheet_width_mm": 50, "sheet_height_mm": 50, "path": "x.pdf" }),
         json!({ "doc": doc, "sheet_width_mm": 10, "sheet_height_mm": 10, "scale": false, "path": "x.pdf" }),
         json!({ "doc": doc, "edge_mm": -1, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_booklet", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
+}
+
+#[test]
+fn two_booklets_per_sheet_through_tools() {
+    let dir = workdir("booklet2up");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let single = ok(&mut a, "doc_booklet", json!({ "doc": doc, "path": "one.pdf" }));
+    assert_eq!(single["two_up"].as_bool(), Some(false));
+    let r = ok(&mut a, "doc_booklet", json!({ "doc": doc, "two_up_sheet": "SRA3", "two_up_marks": true, "path": "two.pdf" }));
+    assert_eq!(r["two_up"].as_bool(), Some(true));
+    // One press-sheet side per booklet side, and the press sheet stays portrait SRA3.
+    let out = ok(&mut a, "doc_open", json!({ "path": "two.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": out }));
+    assert_eq!(info["document"]["pages"].as_u64(), r["sides"].as_u64());
+    for bad in [
+        json!({ "doc": doc, "two_up_sheet": "A9", "path": "x.pdf" }),
+        json!({ "doc": doc, "two_up_sheet": "A5", "path": "x.pdf" }),
+        json!({ "doc": doc, "two_up_sheet": "SRA3", "two_up_margin_mm": -1, "path": "x.pdf" }),
+        json!({ "doc": doc, "two_up_sheet": "SRA3", "two_up_gap_mm": -1, "path": "x.pdf" }),
     ] {
         assert!(matches!(a.call("doc_booklet", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
     }

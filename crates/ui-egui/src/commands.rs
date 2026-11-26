@@ -437,6 +437,11 @@ impl PdfCraftApp {
                 self.impose_draft.screen = 0;
                 self.dialog = Some(Dialog::Impose(kind));
             }
+            "impose.add_bleed" => self.dialog = Some(Dialog::AddBleed),
+            "page.repeat" => {
+                self.repeat_draft.reset();
+                self.dialog = Some(Dialog::RepeatPages);
+            }
             "page.boxes" => {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);

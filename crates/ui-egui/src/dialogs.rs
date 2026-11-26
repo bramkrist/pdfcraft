@@ -8,6 +8,7 @@ use pdfcraft_engine::Edit;
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 pub(super) mod appearance;
+pub(super) mod bleed_ui;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
@@ -18,6 +19,7 @@ pub(super) mod palette;
 pub(super) mod preferences;
 mod prompts;
 pub(super) mod protect;
+pub(super) mod repeat_ui;
 pub(super) mod standards_ui;
 pub(super) mod word_count_ui;
 
@@ -45,6 +47,8 @@ struct Pending {
     protect_now: bool,
     boxes_now: bool,
     impose_now: bool,
+    repeat_now: bool,
+    bleed_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -427,6 +431,20 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             ui.set_width(700.0);
             let (go, cancel) = crate::impose_ui::body(ui, app, &t, kind);
             req.impose_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::AddBleed => {
+            ui.set_width(460.0);
+            let (go, cancel) = crate::bleed_ui::body(ui, app, &t);
+            req.bleed_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::RepeatPages => {
+            ui.set_width(380.0);
+            let (go, cancel) = crate::repeat_ui::body(ui, app, &t);
+            req.repeat_now = go;
             req.close = go || cancel;
             return false;
         }
@@ -1948,6 +1966,12 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
         app.apply_edit(edit);
+    }
+    if req.bleed_now {
+        crate::bleed_ui::finish(app);
+    }
+    if req.repeat_now && app.apply_edit(app.repeat_draft.edit()) {
+        app.repeat_draft.reset();
     }
     if req.impose_now
         && let Dialog::Impose(kind) = dialog

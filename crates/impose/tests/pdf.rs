@@ -239,3 +239,25 @@ fn manual_pages_render_where_and_how_they_were_placed() {
     assert_eq!(rgb(&s, 130, 200 - 40), BLUE, "clockwise: blue at the bottom");
     assert_eq!(rgb(&s, 60, 100), WHITE, "nothing placed there");
 }
+
+#[test]
+fn two_booklets_on_one_sheet_repeat_every_side_of_the_booklet_and_keep_the_big_sheet_portrait() {
+    use pdfcraft_impose::{Booklet, TwoUp, booklet_two_up_document};
+    const MM: f64 = 72.0 / 25.4;
+    // Eight A5 pages: a saddle-stitched booklet of 2 sheets = 4 sides of 296 x 210 mm.
+    let pages: Vec<(u32, u32, &str)> = (0..8).map(|_| (420, 595, "1 0 0 rg 0 0 420 595 re f")).collect();
+    let src = Document::open(Arc::new(pdf(&pages))).unwrap();
+    let two = TwoUp::new((450.0 * MM, 320.0 * MM));
+    let out = booklet_two_up_document(&src, &Booklet::new(), &two, Content::DocumentAndMarkups).unwrap();
+    let doc = Document::open(Arc::new(out.clone())).unwrap();
+    let sizes = pdfcraft_print::page_sizes(&doc);
+    assert_eq!(sizes.len(), 4, "one big-sheet side per booklet side");
+    for (w, h) in &sizes {
+        assert!((w - 320.0 * MM).abs() < 0.5 && (h - 450.0 * MM).abs() < 0.5, "{w} x {h}: stays portrait");
+    }
+    // Both booklets print: the top and the bottom half of the first side are both red.
+    let p = render(&out, 0);
+    let (x, third) = (p.width as usize / 2, p.height as usize / 4);
+    assert_eq!(rgb(&p, x, third), RED);
+    assert_eq!(rgb(&p, x, third * 3), RED);
+}

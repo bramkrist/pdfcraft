@@ -184,6 +184,7 @@ const PAGES: &[&str] = &[
     "page.extract",
     "page.split",
     "page.duplicate",
+    "page.repeat",
     "page.delete",
     SEP,
     "page.rotate",
@@ -227,7 +228,7 @@ const SIGN: &[&str] = &[
     "sign.panel",
 ];
 /// Imposing: the press-sheet layouts, as an imposition plug-in's Easy imposition menu has them.
-const IMPOSING: &[&str] = &["impose.step_repeat", "impose.n_up", SEP, "impose.booklet"];
+const IMPOSING: &[&str] = &["impose.step_repeat", "impose.n_up", SEP, "impose.booklet", SEP, "impose.add_bleed"];
 const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab"];
 const HELP: &[&str] =
     &["help.shortcuts", SEP, "help.app_page", "help.github", "help.website", "help.discord", SEP, "help.check_updates", SEP, "help.about"];

@@ -47,6 +47,24 @@ fn sheet_size_oriented(a: &Args, landscape_default: bool) -> Result<(f64, f64)> 
     Ok(if a.opt_bool("landscape")?.unwrap_or(landscape_default) { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) })
 }
 
+/// The press sheet of a two-booklets-per-sheet job (`two_up_sheet`, a name from [`SHEETS`]), or
+/// `None` when the booklet is made on its own.
+fn two_up_arg(a: &Args) -> Result<Option<impose::TwoUp>> {
+    let Some(name) = a.opt_str("two_up_sheet")? else { return Ok(None) };
+    let (w, h) = SHEETS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, s)| *s)
+        .ok_or_else(|| bad(format!("unknown two_up_sheet {name:?}; choose one of {}", SHEETS.map(|(n, _)| n).join(", "))))?;
+    let mut two = impose::TwoUp::new((w * MM, h * MM));
+    if let Some(m) = mm(a, "two_up_margin_mm")? {
+        two.margin = m;
+    }
+    two.gap = mm(a, "two_up_gap_mm")?.unwrap_or(0.0);
+    two.marks = a.opt_bool("two_up_marks")?.unwrap_or(false);
+    Ok(Some(two))
+}
+
 /// A count argument: at least 1.
 fn count(a: &Args, key: &str) -> Result<Option<usize>> {
     match a.opt_int(key)? {
@@ -204,10 +222,19 @@ impl Automation {
         spec.creep = mm(a, "creep_mm")?.unwrap_or(0.0);
         let content = content_arg(a)?;
         let sides = impose::booklet(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
-        let bytes = self.session.booklet_pdf(id, &spec, content).map_err(failed)?;
+        let two = two_up_arg(a)?;
+        let bytes = match &two {
+            Some(two) => {
+                // Check the pair fits before the work starts, so the refusal names the room it needed.
+                let leaf = sides.first().map(|s| s.size).ok_or_else(|| bad("there are no pages to impose"))?;
+                impose::two_up_spec(leaf, two).map_err(|e| bad(e.to_string()))?;
+                self.session.booklet_two_up_pdf(id, &spec, two, content).map_err(failed)?
+            }
+            None => self.session.booklet_pdf(id, &spec, content).map_err(failed)?,
+        };
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
-        Ok(json!({ "pages": sizes.len(), "sides": sides.len(), "bytes": bytes.len(), "path": path.to_string_lossy() }))
+        Ok(json!({ "pages": sizes.len(), "sides": sides.len(), "two_up": two.is_some(), "bytes": bytes.len(), "path": path.to_string_lossy() }))
     }
 
     /// `doc_impose_manual`: place pages on sheets by hand and save the print-ready PDF.

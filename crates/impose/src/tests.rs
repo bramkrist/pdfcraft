@@ -550,3 +550,43 @@ fn the_edge_a_sheet_is_turned_over_is_the_physical_one_whatever_its_orientation(
         }
     }
 }
+
+#[test]
+fn two_booklet_leaves_stack_on_a_portrait_sheet_when_they_fit() {
+    // A5 booklet sheet side (296 x 210 mm) twice on SRA3 portrait (320 x 450 mm), 8 mm margins.
+    let spec = two_up_spec((296.0 * MM, 210.0 * MM), &TwoUp::new((450.0 * MM, 320.0 * MM))).unwrap();
+    assert!(spec.sheet.0 < spec.sheet.1, "the pair stays on a portrait sheet: {:?}", spec.sheet);
+    assert_eq!((spec.cols, spec.rows), (Some(1), Some(2)));
+    assert_eq!(spec.duplex, Some(Duplex::LongEdge));
+    assert_eq!(spec.fill, Fill::Repeat);
+    assert!(!spec.rotate, "booklet leaves are never turned to save room");
+    assert_eq!(spec.marks, None);
+}
+
+#[test]
+fn two_booklet_leaves_go_side_by_side_when_only_a_landscape_sheet_holds_them() {
+    // Leaves 210 mm wide and 150 mm tall: two of them stacked need 300 mm of height but a portrait
+    // 210 x 297 mm sheet has 281 mm to give; side by side on the landscape sheet they fit.
+    let two = TwoUp { marks: true, ..TwoUp::new((297.0 * MM, 210.0 * MM)) };
+    let spec = two_up_spec((130.0 * MM, 180.0 * MM), &two).unwrap();
+    assert_eq!((spec.cols, spec.rows), (Some(2), Some(1)));
+    assert!(spec.sheet.0 > spec.sheet.1);
+    assert_eq!(spec.duplex, Some(Duplex::ShortEdge));
+    let marks = spec.marks.unwrap();
+    assert_eq!((marks.style, marks.registration), (MarkStyle::Centred, true));
+}
+
+#[test]
+fn two_booklet_leaves_that_fit_nowhere_are_refused_with_the_room_they_needed() {
+    let err = two_up_spec((296.0 * MM, 210.0 * MM), &TwoUp::new((297.0 * MM, 210.0 * MM))).unwrap_err();
+    assert!(matches!(err, ImposeError::GridTooBig { cols: 1, rows: 2, .. }), "{err:?}");
+}
+
+#[test]
+fn two_up_rejects_nonsense_numbers() {
+    let leaf = (100.0, 100.0);
+    assert!(two_up_spec(leaf, &TwoUp { margin: -1.0, ..TwoUp::new((1000.0, 1000.0)) }).is_err());
+    assert!(two_up_spec(leaf, &TwoUp { gap: f64::NAN, ..TwoUp::new((1000.0, 1000.0)) }).is_err());
+    assert!(two_up_spec((0.0, 100.0), &TwoUp::new((1000.0, 1000.0))).is_err());
+    assert!(two_up_spec(leaf, &TwoUp::new((f64::INFINITY, 1000.0))).is_err());
+}

@@ -113,6 +113,8 @@ impl PdfCraftApp {
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
                     "page-boxes" => Some(Dialog::PageBoxes),
+                    "add-bleed" => Some(Dialog::AddBleed),
+                    "repeat-pages" => Some(Dialog::RepeatPages),
                     "step-repeat" => Some(Dialog::Impose(crate::impose_ui::ImposeKind::StepRepeat)),
                     "n-up" => Some(Dialog::Impose(crate::impose_ui::ImposeKind::NUp)),
                     "booklet" => Some(Dialog::Impose(crate::impose_ui::ImposeKind::Booklet)),

@@ -117,6 +117,10 @@ pub enum Dialog {
     BookmarksFromTextStyles,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
+    /// Organize pages ▸ Repeat pages… (how many copies of each page).
+    RepeatPages,
+    /// Imposing ▸ Add bleed.
+    AddBleed,
     /// Imposing ▸ Step and repeat, n-up pages, Create booklet: the imposition wizards.
     Impose(crate::impose_ui::ImposeKind),
     /// Add / Update Header and Footer, Watermark, Background.

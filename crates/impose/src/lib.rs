@@ -667,6 +667,9 @@ pub enum DocumentError {
     Layout(#[from] ImposeError),
     #[error(transparent)]
     Print(#[from] PrintError),
+    /// The booklet just made could not be read back to be laid on the big sheet.
+    #[error("could not read the booklet back: {0}")]
+    Reopen(String),
 }
 
 /// Lay out every page of `src` by `spec` and write the sheets as a print-ready PDF. Annotations
@@ -703,5 +706,73 @@ mod bleed_tests;
 mod booklet_tests;
 #[cfg(test)]
 mod manual_tests;
+/// Two booklets to a press sheet: the big sheet the booklet sheets are laid on, two to a side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TwoUp {
+    /// The big sheet (either orientation: the portrait one is tried first, then the landscape one).
+    pub sheet: (f64, f64),
+    /// Margin on every side of the big sheet.
+    pub margin: f64,
+    /// Space between the two booklet sheets.
+    pub gap: f64,
+    /// Centred registration marks around each booklet sheet.
+    pub marks: bool,
+}
+
+impl TwoUp {
+    pub fn new(sheet: (f64, f64)) -> Self {
+        Self { sheet, margin: 8.0 * MM, gap: 0.0, marks: false }
+    }
+}
+
+/// Millimetres in points.
+const MM: f64 = 72.0 / 25.4;
+
+/// The step & repeat that lays two copies of a `leaf` (one booklet sheet side) on the big sheet:
+/// stacked on a portrait sheet (one column, two rows), side by side on a landscape one. The big
+/// sheet keeps its portrait orientation when the pair fits that way, so front and back stay
+/// behind each other. A booklet leaf turns like a page, so the duplex edge is the long edge of
+/// a portrait sheet and the short edge of a landscape one.
+pub fn two_up_spec(leaf: (f64, f64), two: &TwoUp) -> Result<StepRepeat, ImposeError> {
+    positive(two.sheet.0, "sheet width")?;
+    positive(two.sheet.1, "sheet height")?;
+    positive(leaf.0, "leaf width")?;
+    positive(leaf.1, "leaf height")?;
+    non_negative(two.margin, "margin")?;
+    non_negative(two.gap, "gap")?;
+    let (lo, hi) = (two.sheet.0.min(two.sheet.1), two.sheet.0.max(two.sheet.1));
+    let tries = [((lo, hi), 1usize, 2usize), ((hi, lo), 2, 1)];
+    let mut first_miss = None;
+    for (sheet, cols, rows) in tries {
+        let need = (cols as f64 * leaf.0 + (cols - 1) as f64 * two.gap, rows as f64 * leaf.1 + (rows - 1) as f64 * two.gap);
+        let area = (sheet.0 - 2.0 * two.margin, sheet.1 - 2.0 * two.margin);
+        if need.0 <= area.0 + FIT_TOLERANCE && need.1 <= area.1 + FIT_TOLERANCE {
+            let mut spec = StepRepeat::new(sheet);
+            spec.margins = Margins::uniform(two.margin);
+            spec.cols = Some(cols);
+            spec.rows = Some(rows);
+            spec.gutter = (if cols > 1 { two.gap } else { 0.0 }, if rows > 1 { two.gap } else { 0.0 });
+            spec.duplex = Some(if sheet.0 <= sheet.1 { Duplex::LongEdge } else { Duplex::ShortEdge });
+            if two.marks {
+                spec.marks = Some(Marks { length: 7.0 * MM, offset: 0.0, style: MarkStyle::Centred, width: 0.5, registration: true });
+            }
+            return Ok(spec);
+        }
+        first_miss.get_or_insert(ImposeError::GridTooBig { cols, rows, need_w: need.0, need_h: need.1, area_w: area.0, area_h: area.1 });
+    }
+    Err(first_miss.unwrap_or(ImposeError::NoPages))
+}
+
+/// Lay out every page of `src` as a booklet by `spec`, then lay two booklet sheet sides on each
+/// side of the big sheet of `two` (see [`two_up_spec`]) and write that as a print-ready PDF.
+pub fn booklet_two_up_document(src: &Document, spec: &Booklet, two: &TwoUp, content: Content) -> Result<Vec<u8>, DocumentError> {
+    let sheets = booklet(&pdfcraft_print::page_sizes(src), spec)?;
+    let booklet_pdf = pdfcraft_print::impose_sheets(src, &sheets, content)?;
+    let leaf = sheets.first().map(|s| s.size).ok_or(ImposeError::NoPages)?;
+    let layout = two_up_spec(leaf, two)?;
+    let booklet_doc = Document::open(std::sync::Arc::new(booklet_pdf)).map_err(|e| DocumentError::Reopen(e.to_string()))?;
+    impose_document(&booklet_doc, &layout, content)
+}
+
 #[cfg(test)]
 mod tests;

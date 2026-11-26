@@ -111,6 +111,13 @@ pub struct ImposeDraft {
     pub scale: bool,
     pub spine: bool,
     pub creep: f64,
+    /// Booklet: two copies of the booklet on every press sheet (the "2 buku" job).
+    pub two_up: bool,
+    /// Index into [`PRESETS`] for the big sheet that carries the two booklets.
+    pub big_preset: usize,
+    pub big_margin: f64,
+    pub big_gap: f64,
+    pub big_marks: bool,
 }
 
 impl Default for ImposeDraft {
@@ -144,6 +151,11 @@ impl Default for ImposeDraft {
             scale: true,
             spine: false,
             creep: 0.0,
+            two_up: false,
+            big_preset: 2,
+            big_margin: 8.0 * MM,
+            big_gap: 0.0,
+            big_marks: true,
         }
     }
 }
@@ -306,7 +318,8 @@ impl ImposeDraft {
         let (w, h) = self.portrait();
         let mut b = Booklet::new();
         // A booklet sheet holds two pages side by side: use it wide unless asked otherwise.
-        b.sheet = (!self.auto_sheet).then_some(if self.orient == Orient::Tall { (w, h) } else { (h, w) });
+        // Two booklets on a press sheet: the booklet's own sheet is the smallest that holds two pages.
+        b.sheet = (!(self.auto_sheet || self.two_up)).then_some(if self.orient == Orient::Tall { (w, h) } else { (h, w) });
         b.binding = match self.binding {
             1 => Binding::Perfect {
                 signature: self.signature.max(4) / 4 * 4,
@@ -323,10 +336,24 @@ impl ImposeDraft {
         b
     }
 
+    /// The big sheet of a two-booklets-per-sheet job; `None` when the booklet is made on its own.
+    pub fn two_up_spec(&self) -> Option<impose::TwoUp> {
+        let &(_, w, h) = PRESETS.get(self.big_preset)?;
+        self.two_up.then_some(impose::TwoUp { sheet: (w * MM, h * MM), margin: self.big_margin, gap: self.big_gap, marks: self.big_marks })
+    }
+
     /// The summary of what Finish would make from pages of `sizes`.
     pub fn summary(&self, kind: ImposeKind, sizes: &[(f64, f64)]) -> Result<Summary, String> {
         match kind {
-            ImposeKind::Booklet => impose::booklet(sizes, &self.booklet_spec()).map(|s| summarize(&s)).map_err(|e| e.to_string()),
+            ImposeKind::Booklet => {
+                let sheets = impose::booklet(sizes, &self.booklet_spec()).map_err(|e| e.to_string())?;
+                let Some(two) = self.two_up_spec() else { return Ok(summarize(&sheets)) };
+                // The booklet sides are the pages of the second layout: two copies on each side of the press sheet.
+                let leaves: Vec<(f64, f64)> = sheets.iter().map(|s| s.size).collect();
+                let leaf = leaves.first().copied().ok_or_else(|| impose::ImposeError::NoPages.to_string())?;
+                let spec = impose::two_up_spec(leaf, &two).map_err(|e| e.to_string())?;
+                impose::step_and_repeat(&leaves, &spec).map(|s| summarize(&s)).map_err(|e| e.to_string())
+            }
             _ => self.layout(kind, sizes).map(|(_, s)| summarize(&s)),
         }
     }
@@ -587,6 +614,30 @@ fn screen_booklet_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, unit: Unit) {
     if d.spacing == Spacing::None {
         d.spacing = Spacing::Simple;
     }
+    heading(ui, tl!("Copies"));
+    ui.add(widgets::checkbox(&mut d.two_up, tl!("Two booklets on each press sheet (the same booklet twice, to cut apart)")));
+    if d.two_up {
+        ui.label(
+            egui::RichText::new(tl!("Each booklet sheet is the smallest that holds two pages; the sheet chosen above is not used.")).weak().small(),
+        );
+    }
+    ui.add_enabled_ui(d.two_up, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Press sheet"));
+            craft_ui::ComboBox::from_id_salt("impose-big-sheet").selected_text(PRESETS.get(d.big_preset).map_or("", |p| p.0)).show_ui(ui, |ui| {
+                for (i, p) in PRESETS.iter().enumerate() {
+                    ui.selectable_value(&mut d.big_preset, i, p.0);
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Margin"));
+            length(ui, &mut d.big_margin, unit, 0.0);
+            ui.label(tl!("Gap"));
+            length(ui, &mut d.big_gap, unit, 0.0);
+        });
+        ui.add(widgets::checkbox(&mut d.big_marks, tl!("Registration marks around each booklet sheet")));
+    });
     if d.binding != 2 {
         ui.horizontal(|ui| {
             ui.label(tl!("Creep per sheet"));
@@ -705,7 +756,10 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
     let stem = doc.name.strip_suffix(".pdf").or_else(|| doc.name.strip_suffix(".PDF")).unwrap_or(&doc.name).to_owned();
     let content = pdfcraft_engine::print::Content::DocumentAndMarkups;
     let made = match kind {
-        ImposeKind::Booklet => app.session.booklet_pdf(id, &app.impose_draft.booklet_spec(), content).map_err(|e| e.to_string()),
+        ImposeKind::Booklet => match app.impose_draft.two_up_spec() {
+            Some(two) => app.session.booklet_two_up_pdf(id, &app.impose_draft.booklet_spec(), &two, content).map_err(|e| e.to_string()),
+            None => app.session.booklet_pdf(id, &app.impose_draft.booklet_spec(), content).map_err(|e| e.to_string()),
+        },
         _ => match app.impose_draft.layout(kind, &sizes) {
             Ok((spec, _)) => app.session.impose_pdf(id, &spec, content).map_err(|e| e.to_string()),
             Err(e) => Err(e),
@@ -713,7 +767,8 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
     };
     match made {
         Ok(bytes) => {
-            let name = format!("{stem}{}.pdf", kind.suffix());
+            let two = kind == ImposeKind::Booklet && app.impose_draft.two_up;
+            let name = format!("{stem}{}{}.pdf", kind.suffix(), if two { "_2UP" } else { "" });
             match app.open_bytes(&name, None, bytes) {
                 Ok(()) => app.impose_draft.screen = 0,
                 Err(e) => app.notify_error(e),
@@ -806,5 +861,26 @@ mod tests {
     fn a_page_too_big_for_the_sheet_says_so() {
         let d = ImposeDraft { preset: 4, ..Default::default() };
         assert!(d.summary(ImposeKind::StepRepeat, &[(600.0 * MM, 900.0 * MM)]).is_err());
+    }
+
+    #[test]
+    fn two_booklets_per_sheet_summarise_the_press_sheet_and_refuse_a_sheet_too_small() {
+        // 8 A5 pages: 4 booklet sides of 296 x 210 mm; two of them stack on SRA3 portrait.
+        // No space at the edge of the booklet sheet (5 mm each side would not leave room for 8 mm margins on SRA3).
+        let mut d = ImposeDraft { two_up: true, big_preset: 2, spacing: Spacing::None, ..Default::default() };
+        let s = d.summary(ImposeKind::Booklet, &[A5; 8]).unwrap();
+        assert_eq!((s.cols, s.rows, s.per_sheet, s.sides), (1, 2, 2, 4));
+        assert!(s.sheet.0 < s.sheet.1, "the press sheet stays portrait: {:?}", s.sheet);
+        // A4 cannot hold two A5 spreads at all; neither can SRA3 once the booklet sheet keeps 5 mm at its edge.
+        d.big_preset = 4;
+        assert!(d.summary(ImposeKind::Booklet, &[A5; 8]).is_err());
+        d.big_preset = 2;
+        d.spacing = Spacing::Simple;
+        assert!(d.summary(ImposeKind::Booklet, &[A5; 8]).is_err());
+        d.spacing = Spacing::None;
+        // Off, the booklet is the booklet it was.
+        d.two_up = false;
+        assert_eq!(d.summary(ImposeKind::Booklet, &[A5; 8]).unwrap().per_sheet, 2);
+        assert!(d.two_up_spec().is_none());
     }
 }

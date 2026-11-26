@@ -100,6 +100,7 @@ use canvas::wheel_boost;
 use canvas::wheel_pager;
 use canvas::zoom_snap;
 use dialogs::appearance;
+use dialogs::bleed_ui;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
@@ -108,6 +109,7 @@ use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
 use dialogs::protect;
+use dialogs::repeat_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
@@ -651,6 +653,10 @@ pub struct PdfCraftApp {
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
     pub impose_draft: impose_ui::ImposeDraft,
+    /// Repeat pages dialog state.
+    pub repeat_draft: repeat_ui::RepeatDraft,
+    /// Add bleed dialog state.
+    pub bleed_draft: bleed_ui::BleedDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.

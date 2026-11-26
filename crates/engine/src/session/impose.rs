@@ -19,6 +19,21 @@ impl Session {
         crate::impose::booklet_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// The print-ready PDF of document `id` made into a booklet by `spec` with two booklet sheet
+    /// sides laid on each side of the big sheet of `two` (two copies of the booklet per press
+    /// sheet; see `pdfcraft_impose::two_up_spec`). The same permissions and layer rules apply as
+    /// for [`Session::impose_pdf`].
+    pub fn booklet_two_up_pdf(
+        &self,
+        id: DocId,
+        spec: &crate::impose::Booklet,
+        two: &crate::impose::TwoUp,
+        content: print::Content,
+    ) -> Result<Vec<u8>, EditError> {
+        let cos = self.imposition_source(id)?;
+        crate::impose::booklet_two_up_document(&cos, spec, two, content).map_err(|e| EditError::Print(e.to_string()))
+    }
+
     /// The print-ready PDF of document `id` laid out by hand by `spec` (see `pdfcraft-impose`).
     /// The same permissions and layer rules apply as for [`Session::impose_pdf`].
     pub fn manual_pdf(&self, id: DocId, spec: &crate::impose::Manual, content: print::Content) -> Result<Vec<u8>, EditError> {
