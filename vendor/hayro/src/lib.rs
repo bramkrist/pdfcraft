@@ -275,7 +275,7 @@ pub fn render_into<'a>(
         .fill_rect(&Rect::new(0.0, 0.0, pix_width as f64, pix_height as f64));
     let mut clip_path = page.intersected_crop_box().to_kurbo().to_path(0.1);
     clip_path.apply_affine(initial_transform);
-    device.push_clip_path(&ClipPath {
+    device.push_page_clip_path(&ClipPath {
         path: clip_path,
         fill: FillRule::NonZero,
     });

@@ -813,6 +813,13 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch (29): the page's own box in device pixels, once `push_page_clip_path` has
+    /// seen it; a rectangular content clip's edge on it is cut outward, not to the nearest pixel.
+    page_box: Option<Rect>,
+    /// PdfCraft patch (29): one entry per clip pushed on the page (`None` for the page's own box
+    /// and for a clip that isn't a rectangle): a rectangular content clip's exact device rectangle
+    /// and the whole-pixel one it was cut to. `draw_rect` extends an edge lying on the first to the second.
+    rect_clips: Vec<Option<(Rect, Rect)>>,
 }
 
 /// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
@@ -920,6 +927,8 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
         }
     }
 
@@ -1026,6 +1035,8 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1540,6 +1551,44 @@ impl Renderer {
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
 
+    /// PdfCraft patch (29): `rect` with each edge that lies on an edge of the innermost rectangular
+    /// clip moved to the whole-pixel edge that clip was cut to. Art that ends exactly where its
+    /// clip does (a page's background filling its form's box, which is what a bleed's mirrored
+    /// strip and the page both are) would otherwise keep half a pixel of paper at that edge, and two
+    /// of them side by side composite to three quarters, not to all of it. Only an axis-aligned
+    /// transform is handled, and an edge that isn't on the clip's edge is left as it is.
+    fn extended_to_clip_edges(&self, rect: &Rect, transform: Affine) -> Rect {
+        const SAME: f64 = 1e-3;
+        let Some(Some((exact, snapped))) = self.rect_clips.last() else { return *rect };
+        let [a, b, c, d, e, f] = transform.as_coeffs();
+        if ![a, b, c, d, e, f].iter().all(|v| v.is_finite()) || b.abs() > 1e-9 || c.abs() > 1e-9 || a.abs() < 1e-9 || d.abs() < 1e-9 {
+            return *rect;
+        }
+        let (dx0, dx1) = (a * rect.x0 + e, a * rect.x1 + e);
+        let (dy0, dy1) = (d * rect.y0 + f, d * rect.y1 + f);
+        let (lx, hx) = (dx0.min(dx1), dx0.max(dx1));
+        let (ly, hy) = (dy0.min(dy1), dy0.max(dy1));
+        let on = |edge: f64, clip: f64, cut: f64| if (edge - clip).abs() <= SAME { cut } else { edge };
+        let moved = Rect::new(on(lx, exact.x0, snapped.x0), on(ly, exact.y0, snapped.y0), on(hx, exact.x1, snapped.x1), on(hy, exact.y1, snapped.y1));
+        if moved == Rect::new(lx, ly, hx, hy) {
+            return *rect;
+        }
+        let back = transform.inverse();
+        let (p, q) = (back * Point::new(moved.x0, moved.y0), back * Point::new(moved.x1, moved.y1));
+        if !(p.x.is_finite() && p.y.is_finite() && q.x.is_finite() && q.y.is_finite()) {
+            return *rect;
+        }
+        Rect::from_points(p, q)
+    }
+
+    /// PdfCraft patch (29): the clip of the page's own box, which keeps its anti-aliased edge so a
+    /// page whose size isn't whole pixels still shows its last, partly covered pixel.
+    pub(crate) fn push_page_clip_path(&mut self, clip_path: &ClipPath) {
+        self.page_box = Some(clip_path.path.bounding_box());
+        self.rect_clips.push(None);
+        self.push_clip_path_inner(&clip_path.path, clip_path.fill);
+    }
+
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
         let old_transform = *self.ctx.transform();
 
@@ -1591,6 +1640,8 @@ impl Renderer {
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
             image_transparency_stack: Vec::new(),
+            page_box: None,
+            rect_clips: Vec::new(),
             ink: InkState {
                 pass: Some(pass),
                 unsupported: false,
@@ -1869,6 +1920,8 @@ impl Renderer {
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
@@ -1933,6 +1986,8 @@ impl Renderer {
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
@@ -2116,6 +2171,92 @@ impl Renderer {
     }
 }
 
+/// PdfCraft patch (29): the device-space rectangle a content clip names, with the one cut at whole
+/// pixels, or `None` when the clip is anything else (a curve, a rotated or sheared box, a sliver under a
+/// pixel across, a path that isn't finite).
+///
+/// Each clip was anti-aliased on its own and two clips that share an edge composed "over" each
+/// other, so a boundary pixel that each covered half of kept a quarter of what lay beneath: a
+/// light line along every join of abutting clips (a bleed's mirrored strips against the page, a
+/// step and repeat's cells) that Acrobat doesn't show. Cut at whole pixels, two clips sharing an
+/// edge meet on the same pixel boundary and cover each pixel once between them. An edge in the
+/// middle of a pixel (`x.5`, which round numbers of points give at 150% and 250%) is pushed up by
+/// 1e-4 before rounding, so two computations of the same edge that differ by float noise round the
+/// same way and no pixel is dropped between them.
+fn snapped_rect_clip(path: &BezPath, page_box: Option<Rect>) -> Option<(Rect, Rect)> {
+    use kurbo::PathEl;
+    // A tolerance for "the same coordinate": the matrix was applied after the content named them.
+    const SAME: f64 = 1e-3;
+    let elements = path.elements();
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    for (i, el) in elements.iter().enumerate() {
+        match el {
+            PathEl::MoveTo(p) if i == 0 => points.push(*p),
+            PathEl::LineTo(p) if i > 0 => points.push(*p),
+            PathEl::ClosePath if i + 1 == elements.len() => {}
+            _ => return None,
+        }
+    }
+    // `m l l l h`, or `m l l l l` back to the start.
+    if points.len() == 5 {
+        let (first, last) = (points[0], points[4]);
+        if (first.x - last.x).abs() > SAME || (first.y - last.y).abs() > SAME {
+            return None;
+        }
+        points.pop();
+    }
+    if points.len() != 4 || points.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) {
+        return None;
+    }
+    // Four steps round the box, each along one axis and turning to the other: a rectangle.
+    let mut previous_along_x: Option<bool> = None;
+    let mut first_along_x = false;
+    for i in 0..4 {
+        let (p, q) = (points[i], points[(i + 1) % 4]);
+        let (dx, dy) = ((p.x - q.x).abs(), (p.y - q.y).abs());
+        let along_x = if dy <= SAME && dx > SAME {
+            true
+        } else if dx <= SAME && dy > SAME {
+            false
+        } else {
+            return None;
+        };
+        match previous_along_x {
+            None => first_along_x = along_x,
+            Some(before) if before == along_x => return None,
+            Some(_) => {}
+        }
+        previous_along_x = Some(along_x);
+    }
+    if previous_along_x == Some(first_along_x) {
+        return None;
+    }
+    let snap = |v: f64| (v + 0.5 + 1e-4).floor();
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in &points {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    let exact = Rect::new(x0, y0, x1, y1);
+    // An edge on or beyond the page's own edge is cut outward instead: the page box (clipped
+    // anti-aliased on its own) decides how much of its last, partly covered pixel shows, and a
+    // clip rounded inward there would leave that pixel as bare paper.
+    let (px0, py0, px1, py1) = match page_box {
+        Some(b) => (b.min_x() + SAME, b.min_y() + SAME, b.max_x() - SAME, b.max_y() - SAME),
+        None => (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
+    };
+    let low = |v: f64, page: f64| if v <= page { (v - 1e-4).floor() } else { snap(v) };
+    let high = |v: f64, page: f64| if v >= page { (v + 1e-4).ceil() } else { snap(v) };
+    let (x0, y0, x1, y1) = (low(x0, px0), low(y0, py0), high(x1, px1), high(y1, py1));
+    // A clip under a pixel across keeps its anti-aliased coverage instead of vanishing.
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        return None;
+    }
+    Some((exact, Rect::new(x0, y0, x1, y1)))
+}
+
 impl<'a> Device<'a> for Renderer {
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
@@ -2239,6 +2380,8 @@ impl<'a> Device<'a> for Renderer {
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -2299,7 +2442,18 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
-        self.push_clip_path_inner(&clip_path.path, clip_path.fill);
+        // PdfCraft patch (29): a rectangular content clip is cut at whole pixels, so clips that
+        // share an edge share one pixel boundary and leave no seam (see `snapped_rect_clip`).
+        match snapped_rect_clip(&clip_path.path, self.page_box) {
+            Some((exact, snapped)) => {
+                self.rect_clips.push(Some((exact, snapped)));
+                self.push_clip_path_inner(&snapped.to_path(0.1), FillRule::NonZero);
+            }
+            None => {
+                self.rect_clips.push(None);
+                self.push_clip_path_inner(&clip_path.path, clip_path.fill);
+            }
+        }
     }
 
     /// PdfCraft patch (27): a nested group blending in another space can't be drawn in a pass.
@@ -2433,6 +2587,7 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn pop_clip_path(&mut self) {
+        self.rect_clips.pop();
         self.ctx.pop_clip_path();
     }
 
@@ -2612,7 +2767,8 @@ impl<'a> Device<'a> for Renderer {
                     self.push_clip_path_inner(clip_path, *fill_rule);
                 }
 
-                self.ctx.fill_rect(rect);
+                let rect = self.extended_to_clip_edges(rect, transform);
+                self.ctx.fill_rect(&rect);
 
                 if clip_path.is_some() {
                     self.ctx.pop_clip_path();
@@ -2756,6 +2912,8 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+            page_box: None,
+            rect_clips: Vec::new(),
     };
 
     let bg_color = mask.background_color().to_rgba();

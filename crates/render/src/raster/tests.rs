@@ -9622,3 +9622,100 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
         }
     }
 }
+
+/// Two rectangular clips that share an edge (the Mirror bleed's strips against the page, a step
+/// and repeat's cells) leave no seam at it, whatever the zoom puts that edge in a pixel. Each clip
+/// was anti-aliased alone and the two coverages composed "over" each other, so a boundary pixel
+/// each covered half of kept a quarter of the white paper: a light line along the old trim edge of
+/// every bleed in the viewer, while Acrobat showed none. Rectangular content clips now snap to
+/// whole pixels, and two edges that only differ by float noise at a pixel's middle snap alike.
+#[test]
+fn abutting_rectangular_clips_leave_no_seam_at_any_zoom() {
+    // A solid page cut in two at a fractional edge, at an edge in the middle of a pixel (9 points
+    // is 13.5 pixels at 150%), and with a part drawn mirrored the way a bleed's strips are.
+    let layouts: [(&str, &str, &[f32]); 3] = [
+        (
+            "a fractional edge",
+            "q 0 0 8.5039 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q q 8.5039 0 91.4961 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q",
+            &[1.0, 1.3, 1.5, 2.5],
+        ),
+        (
+            "an edge at half a pixel",
+            "q 0 0 9 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q q 9 0 91 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q",
+            &[1.5, 2.5],
+        ),
+        (
+            "a mirrored strip",
+            "q 0 0 7.5 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q q -1 0 0 1 15 0 cm 0 0 7.5 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q q 7.5 0 92.5 100 re W n 0.2 0.4 0.8 rg 0 0 100 100 re f Q",
+            &[1.0, 2.0, 1.1],
+        ),
+    ];
+    for (name, content, scales) in layouts {
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        )
+        .into_bytes();
+        for &scale in scales {
+            let page =
+                PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default()).render(RenderRequest { page: 0, scale, ..Default::default() });
+            assert!(page.error.is_none(), "{name} at {scale}: {:?}", page.error);
+            let solid = [51, 102, 204, 255];
+            let odd: Vec<(u32, u32, Vec<u8>)> = (0..page.height)
+                .flat_map(|y| (0..page.width).map(move |x| (x, y)))
+                .filter_map(|(x, y)| {
+                    let p = &page.rgba[((y * page.width + x) * 4) as usize..][..4];
+                    (p != solid).then(|| (x, y, p.to_vec()))
+                })
+                .take(4)
+                .collect();
+            assert!(odd.is_empty(), "{name} at scale {scale}: pixels that are not the one solid colour, first four {odd:?}");
+        }
+    }
+}
+
+/// A mirror bleed's own structure (`bleed_document`): the page's art is a form whose box it fills
+/// edge to edge, drawn once at the trim box and once mirrored into each strip, every placement
+/// clipped to its part. The art ends exactly where the page and the strip meet, so each placement
+/// covered only half of the pixel that edge falls in, and the two halves composed to three
+/// quarters: a light line along the old trim edge in the viewer (not in Acrobat). Art that ends on
+/// its clip's edge now fills out to the whole pixel the clip was cut to.
+#[test]
+fn a_mirror_bleeds_strips_leave_no_seam_where_they_meet_the_page() {
+    let content = "q 1 0 0 1 8.5039 0 cm 0 0 100 100 re W n /F Do Q \
+                   q -1 0 0 1 8.5039 0 cm 0 0 8.5039 100 re W n /F Do Q \
+                   q -1 0 0 1 208.5039 0 cm 91.4961 0 8.5039 100 re W n /F Do Q";
+    let form = "0.2 0.4 0.8 rg 0 0 100 100 re f";
+    let pdf = format!(
+        "%PDF-1.4\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 117.0078 100] /Contents 4 0 R /Resources << /XObject << /F 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >> stream\n{form}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        form.len()
+    )
+    .into_bytes();
+    for scale in [1.0_f32, 1.3, 1.5, 2.0, 2.5, 4.0] {
+        let page = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default()).render(RenderRequest { page: 0, scale, ..Default::default() });
+        assert!(page.error.is_none(), "scale {scale}: {:?}", page.error);
+        let solid = [51, 102, 204, 255];
+        // The last column is the page's own partly covered pixel (117.0078 points across).
+        let odd: Vec<(u32, u32, Vec<u8>)> = (0..page.height)
+            .flat_map(|y| (0..page.width.saturating_sub(1)).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let p = &page.rgba[((y * page.width + x) * 4) as usize..][..4];
+                (p != solid).then(|| (x, y, p.to_vec()))
+            })
+            .take(4)
+            .collect();
+        assert!(odd.is_empty(), "scale {scale}: pixels that are not the one solid colour, first four {odd:?}");
+    }
+}
