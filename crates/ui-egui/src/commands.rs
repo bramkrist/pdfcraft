@@ -428,13 +428,18 @@ impl PdfCraftApp {
                 }
                 self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
             }
-            "impose.step_repeat" | "impose.n_up" | "impose.booklet" => {
+            "impose.step_repeat" | "impose.n_up" | "impose.unique_collate" | "impose.booklet" => {
                 let kind = match id {
-                    "impose.n_up" => crate::impose_ui::ImposeKind::NUp,
+                    "impose.n_up" | "impose.unique_collate" => crate::impose_ui::ImposeKind::NUp,
                     "impose.booklet" => crate::impose_ui::ImposeKind::Booklet,
                     _ => crate::impose_ui::ImposeKind::StepRepeat,
                 };
                 self.impose_draft.screen = 0;
+                // Unique collate is n-up with "Cut & stack" already on (the wizard's radio), so a
+                // block of copies runs on from sheet to sheet; plain n-up keeps what was chosen.
+                if id == "impose.unique_collate" && self.impose_draft.stack_copies == 0 {
+                    self.impose_draft.stack_copies = 2;
+                }
                 self.dialog = Some(Dialog::Impose(kind));
             }
             "impose.add_bleed" => self.dialog = Some(Dialog::AddBleed),
@@ -928,6 +933,40 @@ mod tests {
         assert_eq!(command_shortcut_label(&ctx, "view.read_mode"), "⌃⌘H");
         assert_eq!(command_modifier_label(&ctx), "⌘");
         crate::i18n::set_current(previous);
+    }
+
+    /// Imposing ▸ Unique collate opens the n-up wizard with "Cut & stack" already chosen, and a
+    /// plain n-up leaves it off.
+    #[test]
+    fn unique_collate_opens_n_up_with_cut_and_stack_on() {
+        // The imposing commands need a document to work on.
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("a.pdf", None, pdf).expect("opens");
+        app.impose_draft.stack_copies = 0;
+        app.execute("impose.n_up");
+        assert!(matches!(app.dialog, Some(Dialog::Impose(crate::impose_ui::ImposeKind::NUp))));
+        assert_eq!(app.impose_draft.stack_copies, 0, "n-up alone is a plain sequence");
+        app.execute("impose.unique_collate");
+        assert!(matches!(app.dialog, Some(Dialog::Impose(crate::impose_ui::ImposeKind::NUp))));
+        assert!(app.impose_draft.stack_copies > 0, "the block of copies is on");
+        assert!(COMMANDS.iter().any(|c| c.id == "impose.unique_collate"));
     }
 
     /// Next and previous tab step one place and wrap around at either end; from no tab they go

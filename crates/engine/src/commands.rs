@@ -403,6 +403,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Imposing (press-sheet layouts): each makes a new document; the open one is not changed.
     c("impose.step_repeat", "Step and repeat…", IMPOSING, None, Printing, "grid-3x3"),
     c("impose.n_up", "n-up pages…", IMPOSING, None, Printing, "layout-grid"),
+    c("impose.unique_collate", "Unique collate…", IMPOSING, None, Printing, "layers"),
     c("impose.booklet", "Create booklet…", IMPOSING, None, Printing, "book-open"),
     c("impose.add_bleed", "Add bleed…", IMPOSING, None, Printing, "square-dashed"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),

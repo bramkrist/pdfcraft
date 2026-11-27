@@ -414,6 +414,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
                 item("Step and repeat", "grid-3x3", "impose.step_repeat", Ready),
                 item("n-up pages", "layout-grid", "impose.n_up", Ready),
+                item("Unique collate", "layers", "impose.unique_collate", Ready),
                 item("Create booklet", "book-open", "impose.booklet", Ready),
                 item("Add bleed", "square-dashed", "impose.add_bleed", Ready),
                 item("Add printer marks", "ruler", "prepress.marks", Planned("M11")),
