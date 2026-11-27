@@ -36,10 +36,14 @@ mod manual;
 
 pub use bleed::{AddBleed, BleedMethod, add_bleed};
 pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
-pub use cut::{CutRequest, CutSpec, Outline, Raster, cut_requests, place_cuts, placement_scale, trace_page, trace_resolution};
+pub use cut::{
+    CutRequest, CutSpec, CutterFile, CutterSpec, Outline, Raster, apply_cutter, cut_requests, place_cuts, placement_scale, trace_page,
+    trace_resolution,
+};
 pub use manual::{Manual, ManualPage, manual};
 /// Contour tracing, for the settings of [`CutSpec`] (`Holes`, `Background`) and the tracer itself.
 pub use pdfcraft_cutline as cutline;
+pub use pdfcraft_cutter as cutter;
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::Document;

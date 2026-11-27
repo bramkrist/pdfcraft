@@ -197,6 +197,10 @@ function cutFields() {
       ${sel('cutholes', 'Area kosong di dalam gambar', [['fill', 'Abaikan (potong sisi luar saja)'], ['keep', 'Ikut dipotong']], 'fill')}
       ${sel('cutbg', 'Latar kosong', [['auto', 'Otomatis (transparan, atau putih untuk JPG)'], ['transparent', 'Hanya transparan'], ['white', 'Putih dianggap kosong']], 'auto')}
       <p class="hint full">0 = tepat di tepi gambar · plus = di luar gambar (mis. 1) · minus = masuk ke dalam gambar. Jarak diukur di lembar, setelah skala halaman. Garis dilacak dari tampilan halaman, jadi tepi hasil bisa beda sekitar 0,1 mm.</p>
+      ${chk('cutter', 'Untuk mesin plotter-cutter: tanda registrasi + QR di lembar, dan file PLT dari garis potong', false)}
+      <div><label class="l" for="o-cutname">Nama job (QR dan nama file .plt)</label><input type="text" id="o-cutname" data-k="cutname" maxlength="32" placeholder="otomatis dari nama file"></div>
+      ${num('cutinset', 'Jarak tanda dari tepi kertas (mm)', 10, 'step="0.5" min="1" max="100"')}
+      <p class="hint full">Tanda registrasi (kotak hitam 5 mm) di 4 sudut, tiap tanda berjarak segitu dari tepi kertas; QR di tengah bawah. Semua garis potong harus ada di dalam tanda, jadi margin harus ≥ jarak tanda + jarak garis potong (mis. margin 15 untuk tanda 10 mm dan garis +1 mm). Satu lembar = satu file PLT. Coba satu lembar dulu di mesin sebelum cetak banyak.</p>
     </div>`;
 }
 
@@ -449,7 +453,16 @@ function cutJob() {
   const c = { offset_mm: numOr('cutoff', 0) };
   if (val('cutholes') === 'keep') c.holes = 'keep';
   if (val('cutbg') && val('cutbg') !== 'auto') c.background = val('cutbg');
+  if (val('cutter')) c.cutter = { name: cutterName(), inset_mm: numOr('cutinset', 10) };
   return c;
+}
+
+// The job's name for the plotter-cutter: what was typed, else the document's, kept to the
+// letters, digits, "-" and "_" the machine's files and the QR code can carry.
+function cutterName() {
+  const clean = (t) => String(t || '').replace(/\.pdf$/i, '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+  const d = activeDoc();
+  return clean(val('cutname')) || clean(d && d.name.split(' › ')[0]) || 'stiker';
 }
 
 function jobLabel(j) {
@@ -2035,8 +2048,10 @@ async function imposeWithCuts(d, j, cut) {
   say('Menulis lembar dengan garis potong…');
   await new Promise((r) => setTimeout(r, 0));
   const out = e.imposeCut(d.bytes.slice(), jobJson, cutJson, JSON.stringify(outlines));
+  // The PLT files are made of the same lines (the engine refuses when they run past the marks).
+  const files = cut.cutter ? JSON.parse(e.cutterFiles(d.bytes.slice(), jobJson, cutJson, JSON.stringify(outlines))) : [];
   const cuts = outlines.reduce((a, o) => a + o.loops.length, 0);
-  return { out, traces: needs.length, cuts };
+  return { out, traces: needs.length, cuts, files };
 }
 
 async function apply() {
@@ -2052,11 +2067,13 @@ async function apply() {
     const j = job();
     const t0 = performance.now();
     const cut = cutJob();
-    let out, cutNote = '';
+    let out, cutNote = '', plt = [];
     if (cut) {
       const r = await imposeWithCuts(d, j, cut);
       out = r.out;
+      plt = r.files;
       cutNote = ` Garis potong: ${r.traces} bentuk dilacak${r.cuts ? '' : ' (tidak ada yang bisa dipotong, cek jarak/latar)'}.`;
+      if (plt.length) cutNote += ` File PLT: ${plt.map((f) => f.name).join(', ')} (ikut terunduh saat PDF disimpan).`;
     } else {
       out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
     }
@@ -2072,6 +2089,7 @@ async function apply() {
     }
     nd = addDoc(`${d.name} › ${label}`, out, tags);
     if (nd) {
+      nd.plt = plt;
       state.view = 'doc';
       state.sheet = 0;
       note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik.${cutNote} Bisa di-layout lagi atau disimpan.`, false, true];
@@ -2139,10 +2157,21 @@ async function save(d, handle) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     }
-    say(`Tersimpan: ${fileName(d)}`, false, true);
+    const plt = d.plt || [];
+    plt.forEach((f, i) => setTimeout(() => downloadText(f.name, f.text), 400 * (i + 1)));
+    say(`Tersimpan: ${fileName(d)}${plt.length ? ` + ${plt.map((f) => f.name).join(', ')}` : ''}`, false, true);
   } catch (e) {
     if (!(e && e.name === 'AbortError')) say(String(e.message || e), true);
   }
+}
+
+// A plain-text file (the plotter-cutter's PLT) saved through the browser's download.
+function downloadText(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
 function say(t, err = false, ok = false) {

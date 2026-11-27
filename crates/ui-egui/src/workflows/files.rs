@@ -945,6 +945,49 @@ impl PdfCraftApp {
         }
     }
 
+    /// Save a plotter-cutter job's PLT files: the browser downloads each; on the desktop one
+    /// picker asks where the first goes (`save_override` in tests) and the others go in the same
+    /// folder under their own names.
+    pub fn save_cutter_files(&mut self, files: Vec<pdfcraft_engine::impose::CutterFile>) {
+        let Some(first) = files.first().map(|f| f.name.clone()) else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let folder = self.active_ids().and_then(|(_, id)| self.session.get(id)).and_then(|d| d.path.clone());
+            let write = move |app: &mut Self, path: std::path::PathBuf| {
+                let dir = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+                for (i, file) in files.iter().enumerate() {
+                    // The first file is where the person put it; the rest sit beside it.
+                    let at = if i == 0 { path.clone() } else { dir.join(&file.name) };
+                    if let Err(e) = crate::editing::write_atomically(&at.to_string_lossy(), &file.bytes) {
+                        app.notify_fmt("Couldn't write {name}: {e}", &[("name", &at.display().to_string()), ("e", &e.to_string())]);
+                        return;
+                    }
+                }
+                app.notify_fmt("Saved the PLT to {path}", &[("path", &dir.display().to_string())]);
+            };
+            match self.save_override.clone() {
+                Some(p) => write(self, p.into()),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title(tl!("Save the PLT file").to_string())
+                        .add_filter_any_case("PLT", &["plt"])
+                        .set_file_name(first);
+                    let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = first;
+            for file in &files {
+                if let Err(e) = crate::editing::download(&file.name, &file.bytes) {
+                    self.notify_error(e);
+                }
+            }
+        }
+    }
+
     /// Export all comments / form data: the format follows the file name's extension.
     /// Export a PDF ▸ Word, HTML or RTF: ask where (`save_override` in tests), then write.
     pub fn export_office_dialog(&mut self, format: pdfcraft_engine::compare::OfficeFormat) {

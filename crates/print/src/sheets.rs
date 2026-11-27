@@ -112,6 +112,11 @@ pub struct Sheet {
     /// are drawn last, in one spot colour, on their own layer.
     pub cuts: Vec<Vec<(f64, f64)>>,
     pub cut_paint: CutPaint,
+    /// What a plotter-cutter's eye reads, in sheet space: clear rectangles first (a code's quiet
+    /// zone), then black ones (the registration squares and a QR code's dark modules). Drawn in
+    /// process black, under the cut lines, on the page itself (they are printed, not cut).
+    pub sensor_clear: Vec<[f64; 4]>,
+    pub sensor_black: Vec<[f64; 4]>,
 }
 
 /// The ink and weight of the cut lines on a sheet.

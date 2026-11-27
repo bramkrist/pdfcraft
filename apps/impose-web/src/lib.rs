@@ -421,6 +421,48 @@ pub struct CutMm {
     pub width_pt: Option<f64>,
     /// Pieces of artwork smaller than this are not cut (default 1 mm²).
     pub min_area_mm2: Option<f64>,
+    /// A plotter-cutter's sheet: registration marks and a QR code on every sheet with cut lines,
+    /// and a PLT file of those lines for each. Needs the cut lines.
+    pub cutter: Option<CutterMm>,
+}
+
+/// The plotter-cutter's marks and PLT file, in millimetres.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct CutterMm {
+    /// The job's name: the QR code's content and the PLT file's name (letters, digits, `-`, `_`).
+    pub name: String,
+    /// Distance from the sheet's edge to the centre of each mark (default 10).
+    pub inset_mm: Option<f64>,
+    /// Side of a mark (default 5).
+    pub mark_mm: Option<f64>,
+    /// Side of the QR code (default 7).
+    pub code_mm: Option<f64>,
+}
+
+/// A PLT file made for one sheet; the text is plain ASCII.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CutterFile {
+    pub name: String,
+    pub text: String,
+}
+
+fn cutter_spec(c: &CutterMm) -> Result<pdfcraft_impose::CutterSpec, String> {
+    let mut layout = pdfcraft_impose::cutter::Layout::default();
+    for (what, v, slot, lo, hi) in [
+        ("inset_mm", c.inset_mm, &mut layout.inset_mm, 1.0, 100.0),
+        ("mark_mm", c.mark_mm, &mut layout.mark_mm, 1.0, 50.0),
+        ("code_mm", c.code_mm, &mut layout.code_mm, 3.0, 50.0),
+    ] {
+        if let Some(v) = v {
+            if !(v.is_finite() && (lo..=hi).contains(&v)) {
+                return Err(bad(format!("cutter {what} must be between {lo} and {hi}")));
+            }
+            *slot = v;
+        }
+    }
+    pdfcraft_impose::cutter::clean_name(&c.name).map_err(|e| bad(format!("cutter name: {e}")))?;
+    Ok(pdfcraft_impose::CutterSpec { name: c.name.clone(), layout })
 }
 
 /// The farthest a cut line may be from the artwork, in millimetres.
@@ -458,6 +500,9 @@ fn cut_spec(cut: &CutMm) -> Result<pdfcraft_impose::CutSpec, String> {
             return Err(bad("cut min_area_mm2 must be between 0 and 1000000"));
         }
         spec.min_area = pt(pt(area));
+    }
+    if let Some(c) = &cut.cutter {
+        cutter_spec(c)?;
     }
     Ok(spec)
 }
@@ -530,11 +575,28 @@ pub fn trace_cut(rgba: &[u8], width: usize, height: usize, need: &CutNeed, cut: 
     Ok(CutOutline { page: need.page, scale: need.scale, clip: need.clip, loops })
 }
 
+/// What a cut job makes.
+#[derive(Debug)]
+pub struct CutJob {
+    pub pdf: Vec<u8>,
+    /// How many cut lines the sheets have.
+    pub paths: usize,
+    /// The plotter-cutter's PLT files, one per sheet with cut lines (empty without `cutter`).
+    pub files: Vec<CutterFile>,
+}
+
 /// The imposed PDF with cut lines on their own layer, from the `outlines` traced for every
-/// placement [`cut_needs`] listed. Returns the PDF and how many cut lines it has.
+/// placement [`cut_needs`] listed; with `cutter`, also the marks and QR code on the sheets and the
+/// PLT files. Returns the PDF and how many cut lines it has.
 pub fn impose_cut(pdf: Vec<u8>, job: &Job, cut: &CutMm, outlines: &[CutOutline]) -> Result<(Vec<u8>, usize), String> {
+    impose_cut_job(pdf, job, cut, outlines).map(|j| (j.pdf, j.paths))
+}
+
+/// [`impose_cut`] with the plotter-cutter's files too.
+pub fn impose_cut_job(pdf: Vec<u8>, job: &Job, cut: &CutMm, outlines: &[CutOutline]) -> Result<CutJob, String> {
     check_cut_mode(job)?;
     let spec = cut_spec(cut)?;
+    let cutter = cut.cutter.as_ref().map(cutter_spec).transpose()?;
     let doc = open(pdf)?;
     let mut sheets = sheets(&pdfcraft_print::page_sizes(&doc), job)?;
     let found: Vec<pdfcraft_impose::Outline> = outlines
@@ -552,8 +614,15 @@ pub fn impose_cut(pdf: Vec<u8>, job: &Job, cut: &CutMm, outlines: &[CutOutline])
     }
     pdfcraft_impose::place_cuts(&mut sheets, &found, &spec.paint);
     let paths = sheets.iter().map(|s| s.cuts.len()).sum();
+    let mut files = Vec::new();
+    if let Some(c) = &cutter {
+        for f in pdfcraft_impose::apply_cutter(&mut sheets, c).map_err(|e| bad(format!("cutter: {e}")))? {
+            // The writer only makes ASCII, so this cannot lose anything.
+            files.push(CutterFile { name: f.name, text: String::from_utf8_lossy(&f.bytes).into_owned() });
+        }
+    }
     let pdf = pdfcraft_print::impose_sheets(&doc, &sheets, content(job)?).map_err(|e| e.to_string())?;
-    Ok((pdf, paths))
+    Ok(CutJob { pdf, paths, files })
 }
 
 /// Press-room preflight of `pdf`: what was found, each check, and the worst outcome.
@@ -786,6 +855,15 @@ mod wasm {
     pub fn impose_cut(pdf: Vec<u8>, job_json: &str, cut_json: &str, outlines_json: &str) -> Result<Vec<u8>, JsError> {
         let outlines: Vec<super::CutOutline> = parse("outlines", outlines_json)?;
         super::impose_cut(pdf, &super::parse_job(job_json).map_err(js)?, &parse("cut", cut_json)?, &outlines).map(|(pdf, _)| pdf).map_err(js)
+    }
+
+    /// `cutterFiles(pdfBytes, jobJson, cutJson, outlinesJson)`: the plotter-cutter's PLT files of
+    /// the same job, as JSON `[{name, text}, …]` (empty without `cutter` in `cutJson`).
+    #[wasm_bindgen(js_name = cutterFiles)]
+    pub fn cutter_files(pdf: Vec<u8>, job_json: &str, cut_json: &str, outlines_json: &str) -> Result<String, JsError> {
+        let outlines: Vec<super::CutOutline> = parse("outlines", outlines_json)?;
+        let made = super::impose_cut_job(pdf, &super::parse_job(job_json).map_err(js)?, &parse("cut", cut_json)?, &outlines).map_err(js)?;
+        to_json(&made.files)
     }
 
     /// `preflight(pdfBytes)`: `{ overall, checks: [{id, title, status, message}], report }` as JSON.

@@ -13,6 +13,7 @@
 //!   access of its kind.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![recursion_limit = "256"] // the doc_impose schema is one large json! literal
 
 mod a11y;
 mod batch;

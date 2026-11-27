@@ -1376,3 +1376,21 @@ fn unusable_cut_paths_are_skipped_and_the_spot_name_is_made_safe() {
     let none = Document::open(Arc::new(impose_sheets(&src, &[cut_sheet(vec![vec![(1.0, 1.0)]])], Content::Document).unwrap())).unwrap();
     assert!(catalog(&none).get(b"OCProperties").is_none());
 }
+
+#[test]
+fn the_cutters_marks_are_printed_rectangles_and_not_on_the_cut_layer() {
+    let src = fixture(1);
+    let sheet = Sheet {
+        size: (100.0, 100.0),
+        sensor_clear: vec![[10.0, 1.0, 30.0, 20.0], [f64::NAN, 0.0, 1.0, 1.0], [5.0, 5.0, 5.0, 9.0]],
+        sensor_black: vec![[2.0, 2.0, 6.0, 6.0], [94.0, 94.0, 98.0, 98.0], [1.0, 1.0, f64::INFINITY, 2.0]],
+        ..Sheet::default()
+    };
+    let out = Document::open(Arc::new(impose_sheets(&src, &[sheet], Content::Document).unwrap())).unwrap();
+    let content = all_streams(&out);
+    assert_eq!(content.matches(" re f\n").count(), 3, "one clear and two black rectangles; the unusable are skipped: {content}");
+    assert!(content.contains("q 1 g\n10 1 20 19 re f"), "{content}");
+    assert!(content.contains("q 0 0 0 1 k\n2 2 4 4 re f"), "{content}");
+    assert!(content.find("1 g").unwrap_or(usize::MAX) < content.find("0 0 0 1 k").unwrap_or(0), "clear first, black over it");
+    assert!(catalog(&out).get(b"OCProperties").is_none(), "marks are printed, so no cut layer");
+}

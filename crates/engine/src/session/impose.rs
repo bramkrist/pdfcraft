@@ -26,6 +26,22 @@ impl Session {
         crate::guard(|| crate::cutting::impose_with_cuts(&cos, &config, spec, cut, content)).map_err(EditError::Print)?.map_err(EditError::Print)
     }
 
+    /// [`Session::impose_cut_pdf`] for a plotter-cutter: with `cutter`, every sheet that has cut
+    /// lines also gets registration marks and a QR code, and a PLT file of its lines comes back
+    /// beside the PDF. Fails, making nothing, when the cutter's output cannot be made.
+    pub fn impose_cut_job(
+        &self,
+        id: DocId,
+        spec: &crate::impose::StepRepeat,
+        cut: &crate::impose::CutSpec,
+        cutter: Option<&crate::impose::CutterSpec>,
+        content: print::Content,
+    ) -> Result<crate::cutting::CutJob, EditError> {
+        let cos = self.imposition_source(id)?;
+        let config = self.get(id).ok_or(EditError::NoDocument)?.config.clone();
+        crate::guard(|| crate::cutting::cut_job(&cos, &config, spec, cut, cutter, content)).map_err(EditError::Print)?.map_err(EditError::Print)
+    }
+
     /// The print-ready PDF of document `id` made into a booklet by `spec` (saddle-stitched,
     /// perfect-bound or continuous; see `pdfcraft-impose`). The same permissions and layer rules
     /// apply as for [`Session::impose_pdf`].

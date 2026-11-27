@@ -118,6 +118,12 @@ pub struct ImposeDraft {
     pub cut_offset: f64,
     /// Cut round the empty areas inside the artwork too.
     pub cut_holes: bool,
+    /// A plotter-cutter's job: registration marks and a QR code on each sheet with cut lines, and
+    /// a PLT file of the lines. Named `cutter_name` (empty: the document's name); the marks are
+    /// `cutter_inset` points from the sheet's edge.
+    pub cutter: bool,
+    pub cutter_name: String,
+    pub cutter_inset: f64,
     // Booklet.
     pub binding: usize,
     pub signature: usize,
@@ -165,6 +171,9 @@ impl Default for ImposeDraft {
             cut: false,
             cut_offset: 0.0,
             cut_holes: false,
+            cutter: false,
+            cutter_name: String::new(),
+            cutter_inset: 10.0 * MM,
             binding: 0,
             signature: 16,
             full_last: false,
@@ -307,6 +316,15 @@ impl ImposeDraft {
             offset: self.cut_offset,
             holes: if self.cut_holes { Holes::Keep } else { Holes::Fill },
             ..CutSpec::new()
+        })
+    }
+
+    /// The plotter-cutter's marks and PLT, if they are asked for with cut lines; the job is
+    /// named `name` unless a name was typed.
+    pub fn cutter_spec(&self, kind: ImposeKind, name: &str) -> Option<pdfcraft_engine::impose::CutterSpec> {
+        (self.cut_spec(kind).is_some() && self.cutter).then(|| pdfcraft_engine::impose::CutterSpec {
+            name: if self.cutter_name.trim().is_empty() { name.to_owned() } else { self.cutter_name.clone() },
+            layout: pdfcraft_engine::impose::cutter::Layout { inset_mm: self.cutter_inset / MM, ..Default::default() },
         })
     }
 
@@ -663,6 +681,20 @@ fn cut_section(ui: &mut egui::Ui, d: &mut ImposeDraft) {
     });
     ui.add(widgets::checkbox(&mut d.cut_holes, tl!("Also cut round empty areas inside the artwork")));
     ui.label(egui::RichText::new(tl!("Measured on the sheet, after the page scale. The line is a spot colour on its own layer.")).weak().small());
+    ui.add(widgets::checkbox(&mut d.cutter, tl!("For a plotter-cutter: registration marks, QR code and a PLT file")));
+    if d.cutter {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Job name (QR code and PLT file; empty: the document's name)"));
+            ui.add(egui::TextEdit::singleline(&mut d.cutter_name).desired_width(140.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Marks from the sheet's edge (mm)"));
+            let mut mm = d.cutter_inset / MM;
+            ui.add(egui::DragValue::new(&mut mm).range(5.0..=100.0).speed(0.1).max_decimals(1));
+            d.cutter_inset = mm * MM;
+        });
+        ui.label(egui::RichText::new(tl!("Keep the artwork and its cut line inside the marks: use a page margin of at least the distance above plus the cut offset. The PLT is saved after the PDF opens.")).weak().small());
+    }
 }
 
 fn screen_booklet(ui: &mut egui::Ui, d: &mut ImposeDraft) {
@@ -864,6 +896,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
     let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
     let stem = doc.name.strip_suffix(".pdf").or_else(|| doc.name.strip_suffix(".PDF")).unwrap_or(&doc.name).to_owned();
     let content = pdfcraft_engine::print::Content::DocumentAndMarkups;
+    let mut plts: Vec<pdfcraft_engine::impose::CutterFile> = Vec::new();
     let made = match kind {
         ImposeKind::Booklet => match app.impose_draft.two_up_spec() {
             Some(two) => app.session.booklet_two_up_pdf(id, &app.impose_draft.booklet_spec(), &two, content).map_err(|e| e.to_string()),
@@ -871,7 +904,13 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
         },
         _ => match app.impose_draft.layout(kind, &sizes) {
             Ok((spec, _)) => match app.impose_draft.cut_spec(kind) {
-                Some(cut) => app.session.impose_cut_pdf(id, &spec, &cut, content).map(|(bytes, _)| bytes).map_err(|e| e.to_string()),
+                Some(cut) => {
+                    let cutter = app.impose_draft.cutter_spec(kind, &stem);
+                    app.session.impose_cut_job(id, &spec, &cut, cutter.as_ref(), content).map_err(|e| e.to_string()).map(|job| {
+                        plts = job.files;
+                        job.pdf
+                    })
+                }
                 None => app.session.impose_pdf(id, &spec, content).map_err(|e| e.to_string()),
             },
             Err(e) => Err(e),
@@ -882,7 +921,12 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
             let two = kind == ImposeKind::Booklet && app.impose_draft.two_up;
             let name = format!("{stem}{}{}.pdf", kind.suffix(), if two { "_2UP" } else { "" });
             match app.open_bytes(&name, None, bytes) {
-                Ok(()) => app.impose_draft.screen = 0,
+                Ok(()) => {
+                    app.impose_draft.screen = 0;
+                    if !plts.is_empty() {
+                        app.save_cutter_files(plts);
+                    }
+                }
                 Err(e) => app.notify_error(e),
             }
         }
@@ -911,6 +955,21 @@ mod tests {
         assert_eq!(wide.per_sheet, 9);
         assert_eq!(best.per_sheet, 10);
         assert!(best.sheet.0 < best.sheet.1, "tall sheet chosen");
+    }
+
+    #[test]
+    fn plotter_cutter_output_needs_cut_lines_and_defaults_its_name_to_the_documents() {
+        let mut d = ImposeDraft { cutter: true, ..Default::default() };
+        assert!(d.cutter_spec(ImposeKind::StepRepeat, "labels").is_none(), "marks are made of cut lines");
+        d.cut = true;
+        let spec = d.cutter_spec(ImposeKind::StepRepeat, "labels").expect("spec");
+        assert_eq!(spec.name, "labels");
+        assert!((spec.layout.inset_mm - 10.0).abs() < 1e-9);
+        d.cutter_name = "271739".into();
+        assert_eq!(d.cutter_spec(ImposeKind::StepRepeat, "labels").map(|s| s.name).as_deref(), Some("271739"));
+        assert!(d.cutter_spec(ImposeKind::Booklet, "labels").is_none(), "only step & repeat has cut lines");
+        d.cutter = false;
+        assert!(d.cutter_spec(ImposeKind::StepRepeat, "labels").is_none());
     }
 
     #[test]

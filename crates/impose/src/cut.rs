@@ -164,3 +164,50 @@ pub fn place_cuts(sheets: &mut [Sheet], outlines: &[Outline], paint: &CutPaint) 
         sheet.cut_paint = paint.clone();
     }
 }
+
+/// A plotter-cutter's sheet: registration marks and a QR code printed on every sheet that has
+/// cut lines, and a PLT file of those lines for each (see `pdfcraft-cutter`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutterSpec {
+    /// The job's name: the QR code's content and the PLT file's name (letters, digits, `-`, `_`).
+    pub name: String,
+    pub layout: pdfcraft_cutter::Layout,
+}
+
+/// A PLT file for one sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutterFile {
+    /// The file's name, with its `.plt`.
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Put the marks and the code on every sheet that has cut lines and make the PLT of each: the
+/// file is `name.plt` for one such sheet, `name-1.plt`, `name-2.plt`, … for several (the code on
+/// each sheet names its own file). Sheets without cut lines are left alone. Nothing is changed
+/// when an error comes back.
+pub fn apply_cutter(sheets: &mut [Sheet], spec: &CutterSpec) -> Result<Vec<CutterFile>, pdfcraft_cutter::CutterError> {
+    let base = pdfcraft_cutter::clean_name(&spec.name)?;
+    let cut: Vec<usize> = sheets.iter().enumerate().filter(|(_, s)| !s.cuts.is_empty()).map(|(i, _)| i).collect();
+    if cut.is_empty() {
+        return Err(pdfcraft_cutter::CutterError::NothingToCut);
+    }
+    let mut made = Vec::with_capacity(cut.len());
+    for (n, &i) in cut.iter().enumerate() {
+        let Some(sheet) = sheets.get(i) else { continue };
+        let name = if cut.len() == 1 { base.clone() } else { format!("{base}-{}", n + 1) };
+        let marks = pdfcraft_cutter::marks(sheet.size, &name, &spec.layout)?;
+        let job = pdfcraft_cutter::Job { name: &name, sheet: sheet.size, layout: spec.layout, loops: &sheet.cuts };
+        let bytes = pdfcraft_cutter::plt(&job)?;
+        made.push((i, marks, CutterFile { name: format!("{name}.plt"), bytes }));
+    }
+    let mut files = Vec::with_capacity(made.len());
+    for (i, marks, file) in made {
+        if let Some(sheet) = sheets.get_mut(i) {
+            sheet.sensor_clear = marks.clear;
+            sheet.sensor_black = marks.black;
+        }
+        files.push(file);
+    }
+    Ok(files)
+}

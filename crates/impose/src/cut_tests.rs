@@ -209,3 +209,44 @@ fn a_cut_on_the_edge_is_as_smooth_as_one_offset_from_it() {
     let (edge, grown) = (points(0.0), points(1.0));
     assert!(edge <= grown * 3 / 2, "{edge} points on the edge against {grown} offset by 1 pt");
 }
+
+fn cutter_spec() -> crate::CutterSpec {
+    crate::CutterSpec { name: "job 42".into(), layout: pdfcraft_cutter::Layout::default() }
+}
+
+/// A 480 × 320 mm sheet with one 100 mm square cut line well inside the marks.
+fn cut_sheet_inside() -> Sheet {
+    let mm = 72.0 / 25.4;
+    let mut s = sheet(vec![]);
+    s.size = (480.0 * mm, 320.0 * mm);
+    s.cuts = vec![vec![(50.0 * mm, 50.0 * mm), (150.0 * mm, 50.0 * mm), (150.0 * mm, 150.0 * mm), (50.0 * mm, 150.0 * mm)]];
+    s
+}
+
+#[test]
+fn sheets_with_cut_lines_get_marks_and_a_named_plt_each() {
+    let mut sheets = vec![cut_sheet_inside(), sheet(vec![]), cut_sheet_inside()];
+    sheets[1].size = sheets[0].size;
+    let files = crate::apply_cutter(&mut sheets, &cutter_spec()).expect("cutter");
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["job42-1.plt", "job42-2.plt"]);
+    assert!(files[0].bytes.starts_with(b"CR;NAMEjob42-1.plt;"));
+    assert!(files[1].bytes.starts_with(b"CR;NAMEjob42-2.plt;"));
+    assert!(!sheets[0].sensor_black.is_empty() && !sheets[2].sensor_black.is_empty());
+    assert!(sheets[1].sensor_black.is_empty() && sheets[1].sensor_clear.is_empty(), "a sheet without cut lines is left alone");
+    assert_ne!(sheets[0].sensor_black, sheets[2].sensor_black, "each sheet's code names its own file");
+    let one = crate::apply_cutter(&mut [cut_sheet_inside()], &cutter_spec()).expect("cutter");
+    assert_eq!(one[0].name, "job42.plt");
+}
+
+#[test]
+fn a_cutter_failure_changes_nothing() {
+    let mut sheets = vec![cut_sheet_inside(), cut_sheet_inside()];
+    // The second sheet's line runs off the marks.
+    sheets[1].cuts[0][0].0 = 1.0;
+    let before = sheets.clone();
+    assert_eq!(crate::apply_cutter(&mut sheets, &cutter_spec()), Err(pdfcraft_cutter::CutterError::OutsideMarks));
+    assert_eq!(sheets, before);
+    assert_eq!(crate::apply_cutter(&mut [sheet(vec![])], &cutter_spec()), Err(pdfcraft_cutter::CutterError::NothingToCut));
+    let bad = crate::CutterSpec { name: "///".into(), ..cutter_spec() };
+    assert_eq!(crate::apply_cutter(&mut [cut_sheet_inside()], &bad), Err(pdfcraft_cutter::CutterError::BadName));
+}

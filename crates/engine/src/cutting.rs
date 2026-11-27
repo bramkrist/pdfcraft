@@ -87,3 +87,32 @@ pub(crate) fn impose_with_cuts(
     let pdf = pdfcraft_print::impose_sheets(src, &sheets, content).map_err(|e| e.to_string())?;
     Ok((pdf, stats))
 }
+
+/// A cut-line run's output: the print-ready PDF, what was cut and, when a plotter-cutter's marks
+/// were asked for, the PLT file of each sheet that has cut lines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutJob {
+    pub pdf: Vec<u8>,
+    pub stats: CutStats,
+    pub files: Vec<pdfcraft_impose::CutterFile>,
+}
+
+/// [`impose_with_cuts`], with `cutter`'s marks and code on every sheet that has cut lines and
+/// their PLT files. Nothing is made when the cutter's output cannot be (a cut line off the marks,
+/// no room for the marks, nothing cut).
+pub(crate) fn cut_job(
+    src: &pdfcraft_cos::Document,
+    config: &RenderConfig,
+    spec: &pdfcraft_impose::StepRepeat,
+    cut: &CutSpec,
+    cutter: Option<&pdfcraft_impose::CutterSpec>,
+    content: pdfcraft_print::Content,
+) -> Result<CutJob, String> {
+    let (mut sheets, stats) = cut_sheets(src, config, spec, cut, content)?;
+    let files = match cutter {
+        Some(cutter) => pdfcraft_impose::apply_cutter(&mut sheets, cutter).map_err(|e| e.to_string())?,
+        None => Vec::new(),
+    };
+    let pdf = pdfcraft_print::impose_sheets(src, &sheets, content).map_err(|e| e.to_string())?;
+    Ok(CutJob { pdf, stats, files })
+}

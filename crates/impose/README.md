@@ -10,6 +10,10 @@ them and `trace_page` (with `pdfcraft-cutline`) finds the line at a signed offse
 and `place_cuts` puts one on every copy. The engine and the web app each draw the pages their own
 way; the geometry is shared.
 
+Plotter-cutter: `apply_cutter` (with `pdfcraft-cutter`) puts the registration marks and the QR
+code on every sheet that has cut lines and returns one PLT file for each (`name.plt`, or
+`name-1.plt`, `name-2.plt`, … for several). It is all-or-nothing: on an error no sheet changes.
+
 Lengths are PDF points; the `doc_impose` tool takes millimetres.
 
 Not yet: creep, work-and-turn/tumble, perfect-bound signatures, cell rotation, colour bars,

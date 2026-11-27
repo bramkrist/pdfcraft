@@ -12,6 +12,7 @@ workspace = true
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-cutline = { workspace = true }
+pdfcraft-cutter = { workspace = true }
 pdfcraft-print = { workspace = true }
 thiserror = { workspace = true }
 

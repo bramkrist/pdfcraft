@@ -32,6 +32,7 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.18.1" }
 pdfcraft-cutline = { path = "crates/cutline", version = "0.18.1" }
+pdfcraft-cutter = { path = "crates/cutter", version = "0.18.1" }
 pdfcraft-filters = { path = "crates/filters", version = "0.18.1" }
 pdfcraft-cos = { path = "crates/cos", version = "0.18.1" }
 pdfcraft-crypt = { path = "crates/crypt", version = "0.18.1" }
@@ -84,6 +85,8 @@ hayro-jbig2 = "0.3"
 # foundation
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
+# QR code encoder (the cutter's sheet code); no image output, so no extra dependencies.
+qrcode = { version = "0.14", default-features = false }
 smallvec = "1.16"
 serde_json = "1"
 log = "0.4"

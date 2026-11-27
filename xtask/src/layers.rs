@@ -32,6 +32,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // L0 foundation (standalone, publishable)
     ("geom", Class::Standalone(0)),
     ("cutline", Class::Standalone(0)),
+    ("cutter", Class::Standalone(0)),
     ("filters", Class::Standalone(0)),
     ("crypt", Class::Standalone(0)),
     ("arlington", Class::Standalone(0)),

@@ -429,3 +429,92 @@ fn cut_lines_are_for_the_grid_modes_and_bad_settings_are_refused() {
     let need = cut_needs(pdf(1, 100, 100), &sticker_job(), &cut(0.0)).expect("needs").remove(0);
     assert!(trace_cut(&[0; 16], 3, 1, &need, &cut(0.0)).is_err());
 }
+
+fn cutter_job() -> Job {
+    // The cut lines have to lie inside the marks, which are 10 mm in from the sheet's edge.
+    job(r#"{"mode":"repeat","sheet_mm":[210,297],"margin_mm":15,"gutter_mm":[2,2]}"#)
+}
+
+fn with_cutter(offset_mm: f64, name: &str) -> CutMm {
+    CutMm { offset_mm, cutter: Some(CutterMm { name: name.into(), ..CutterMm::default() }), ..CutMm::default() }
+}
+
+fn traced(pdf: &[u8], job: &Job, cut: &CutMm) -> Vec<CutOutline> {
+    cut_needs(pdf.to_vec(), job, cut)
+        .expect("needs")
+        .iter()
+        .map(|need| {
+            let (rgba, w, h) = disc_canvas(need);
+            trace_cut(&rgba, w, h, need, cut).expect("trace")
+        })
+        .collect()
+}
+
+#[test]
+fn a_cutter_job_has_marks_on_the_sheet_and_a_plt_named_for_the_job() {
+    let job = cutter_job();
+    let source = pdf(1, 100, 100);
+    let cut = with_cutter(1.0, "stiker-7");
+    let outlines = traced(&source, &job, &cut);
+    let made = impose_cut_job(source.clone(), &job, &cut, &outlines).expect("job");
+    assert_eq!(made.files.len(), 1);
+    let file = &made.files[0];
+    assert_eq!(file.name, "stiker-7.plt");
+    assert!(file.text.is_ascii() && file.text.starts_with("CR;NAMEstiker-7.plt;SIZE"), "{}", &file.text[..40]);
+    // The header says how long the file is, and the lines end with the machine's stop code.
+    let size: usize = file.text["CR;NAMEstiker-7.plt;SIZE".len()..].split("Bytes").next().expect("size").parse().expect("number");
+    assert_eq!(size, file.text.len());
+    assert!(file.text.ends_with("!PG;"));
+    // One closed line for each copy.
+    assert_eq!(file.text.matches("PU").count(), made.paths + 1, "a pen-up for each line and the last one");
+    // The marks are printed, so the file is bigger than the same job without them.
+    let plain = impose_cut(source, &job, &cut_of(&cut), &outlines).expect("plain").0;
+    assert!(made.pdf.len() > plain.len());
+}
+
+fn cut_of(c: &CutMm) -> CutMm {
+    CutMm { cutter: None, ..c.clone() }
+}
+
+#[test]
+fn without_a_cutter_there_are_no_plt_files() {
+    let job = cutter_job();
+    let source = pdf(1, 100, 100);
+    let cut = cut(1.0);
+    let made = impose_cut_job(source.clone(), &job, &cut, &traced(&source, &job, &cut)).expect("job");
+    assert!(made.files.is_empty());
+}
+
+#[test]
+fn cut_lines_that_run_past_the_marks_are_refused_and_so_are_bad_cutter_settings() {
+    // Marks 30 mm in from the edge leave the lines of copies near the edge outside them.
+    let source = pdf(1, 100, 100);
+    let cut = CutMm { cutter: Some(CutterMm { name: "x".into(), inset_mm: Some(30.0), ..CutterMm::default() }), ..cut(1.0) };
+    let narrow = sticker_job();
+    let err = impose_cut_job(source.clone(), &narrow, &cut, &traced(&source, &narrow, &cut_of(&cut))).expect_err("off the marks");
+    assert!(err.contains("cutter"), "{err}");
+    let c = |name: &str, inset: Option<f64>, mark: Option<f64>, code: Option<f64>| CutMm {
+        cutter: Some(CutterMm { name: name.into(), inset_mm: inset, mark_mm: mark, code_mm: code }),
+        ..CutMm::default()
+    };
+    for bad in [
+        c("", None, None, None),
+        c("!!!", None, None, None),
+        c("  / ", None, None, None),
+        c("ok", Some(0.0), None, None),
+        c("ok", Some(f64::NAN), None, None),
+        c("ok", None, Some(500.0), None),
+        c("ok", None, None, Some(1.0)),
+    ] {
+        assert!(cut_needs(source.clone(), &cutter_job(), &bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn a_job_name_is_cleaned_not_trusted() {
+    let job = cutter_job();
+    let source = pdf(1, 100, 100);
+    let cut = with_cutter(1.0, "../to ko/stiker 7");
+    let made = impose_cut_job(source.clone(), &job, &cut, &traced(&source, &job, &cut)).expect("job");
+    assert_eq!(made.files[0].name, "tokostiker7.plt");
+}

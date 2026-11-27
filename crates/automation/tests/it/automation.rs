@@ -5265,6 +5265,43 @@ fn cut_lines_on_press_sheets_through_tools() {
 }
 
 #[test]
+fn plotter_cutter_output_through_tools() {
+    let dir = workdir("cutter");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Marks and a PLT beside the PDF; the layout is inside the marks (margin 14 mm, marks at 10).
+    let args = json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 14, "scale_percent": 30, "cut_offset_mm": 1, "cutter_marks": true, "cutter_name": "job-7", "path": "sheet.pdf" });
+    let made = ok(&mut a, "doc_impose", args);
+    let files = made["cut"]["cutter"].as_array().expect("cutter files");
+    // The fixture has three pages, so three sheets, each with its own PLT and its own code.
+    assert_eq!(files.len(), 3, "{made}");
+    let plt = std::fs::read(dir.join("job-7-2.plt")).expect("the PLT is written beside the PDF");
+    assert!(plt.starts_with(b"CR;NAMEjob-7-2.plt;"));
+    assert!(String::from_utf8_lossy(&plt).ends_with("!PG;"));
+    assert!(dir.join("sheet.pdf").exists());
+    // The name defaults to the PDF's.
+    ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 14, "scale_percent": 30, "cut_offset_mm": 0, "cutter_marks": true, "path": "named-by-file.pdf" }),
+    );
+    assert!(dir.join("named-by-file-1.plt").exists());
+    for bad in [
+        // Marks need cut lines; cutter settings need the marks; numbers and names are checked.
+        json!({ "doc": doc, "sheet": "A4", "cutter_marks": true, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cutter_name": "n", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cutter_marks": true, "cutter_inset_mm": 1e9, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cutter_marks": true, "cutter_name": "///", "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_impose", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    // A layout that runs off the marks is refused, and nothing is written.
+    let off = a.call("doc_impose", &json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 14, "scale_percent": 30, "cut_offset_mm": 1, "cutter_marks": true, "cutter_inset_mm": 60, "path": "off.pdf" }));
+    assert!(off.is_err(), "cut lines outside the marks");
+    assert!(!dir.join("off.pdf").exists() && !dir.join("off.plt").exists());
+}
+
+#[test]
 fn making_a_booklet_through_tools() {
     let dir = workdir("booklet");
     let mut a = auto(&dir);

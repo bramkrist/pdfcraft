@@ -337,6 +337,7 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
             }
             c.push_str("Q\n");
         }
+        c.push_str(&sensor_operators(sheet));
         let cuts = cut_paths(sheet);
         if !cuts.is_empty() {
             c.push_str(&cut_operators(&cuts, sheet.cut_paint.width));
@@ -401,6 +402,24 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
 
 /// The name the cut layer's properties entry has in each sheet's resources.
 const CUT_PROPERTY: &[u8] = b"CutOC";
+
+/// The cutter's marks: clear rectangles (white), then black ones (process black, `0 0 0 1 k`), as
+/// filled rectangles. Rectangles with a non-finite or empty side are skipped.
+fn sensor_operators(sheet: &Sheet) -> String {
+    let mut out = String::new();
+    for (colour, rects) in [("1 g", &sheet.sensor_clear), ("0 0 0 1 k", &sheet.sensor_black)] {
+        let rects: Vec<&[f64; 4]> = rects.iter().filter(|r| r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).collect();
+        if rects.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("q {colour}\n"));
+        for r in rects {
+            out.push_str(&format!("{} {} {} {} re f\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1])));
+        }
+        out.push_str("Q\n");
+    }
+    out
+}
 
 /// The sheet's cut lines that can be drawn: closed polygons of at least three finite points.
 fn cut_paths(sheet: &Sheet) -> Vec<&[(f64, f64)]> {

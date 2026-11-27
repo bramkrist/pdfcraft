@@ -129,6 +129,40 @@ fn cut_arg(a: &Args) -> Result<Option<CutSpec>> {
     Ok(Some(cut))
 }
 
+/// A plotter-cutter's marks and code from `cutter_marks` and the `cutter_*` arguments; `None`
+/// unless `cutter_marks` is true, which needs cut lines. The job is named `cutter_name`, else the
+/// output file's name.
+fn cutter_arg(a: &Args, has_cut: bool, path: &std::path::Path) -> Result<Option<impose::CutterSpec>> {
+    if !a.opt_bool("cutter_marks")?.unwrap_or(false) {
+        for key in ["cutter_name", "cutter_inset_mm", "cutter_mark_mm", "cutter_code_mm"] {
+            if a.get(key).is_some() {
+                return Err(bad(format!("{key} needs cutter_marks")));
+            }
+        }
+        return Ok(None);
+    }
+    if !has_cut {
+        return Err(bad("cutter_marks needs cut_offset_mm: the PLT is made of the cut lines"));
+    }
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = a.opt_str("cutter_name")?.map_or(stem, str::to_string);
+    let mut layout = impose::cutter::Layout::default();
+    for (key, slot, range) in [
+        ("cutter_inset_mm", &mut layout.inset_mm, 1.0..=100.0),
+        ("cutter_mark_mm", &mut layout.mark_mm, 1.0..=50.0),
+        ("cutter_code_mm", &mut layout.code_mm, 3.0..=50.0),
+    ] {
+        if let Some(v) = a.opt_num(key)? {
+            if !(v.is_finite() && range.contains(&v)) {
+                return Err(bad(format!("{key} must be between {} and {}", range.start(), range.end())));
+            }
+            *slot = v;
+        }
+    }
+    impose::cutter::clean_name(&name).map_err(|e| bad(format!("cutter_name: {e}")))?;
+    Ok(Some(impose::CutterSpec { name, layout }))
+}
+
 /// What prints besides the page content: `comments_forms`.
 fn content_arg(a: &Args) -> Result<Content> {
     Ok(match a.opt_str("comments_forms")?.unwrap_or("document") {
@@ -235,19 +269,30 @@ impl Automation {
         let sheets = impose::step_and_repeat(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
         let up = sheets.iter().map(|s| s.placed.len()).max().unwrap_or(0);
         let cut = cut_arg(a)?;
-        let (bytes, stats) = match &cut {
-            Some(cut) => {
-                let (bytes, stats) = self.session.impose_cut_pdf(id, &spec, cut, content).map_err(failed)?;
-                (bytes, Some(stats))
-            }
-            None => (self.session.impose_pdf(id, &spec, content).map_err(failed)?, None),
-        };
         let path = self.resolve(a.str("path")?, true)?;
+        let cutter = cutter_arg(a, cut.is_some(), &path)?;
+        let (bytes, stats, files) = match &cut {
+            Some(cut) => {
+                let job = self.session.impose_cut_job(id, &spec, cut, cutter.as_ref(), content).map_err(failed)?;
+                (job.pdf, Some(job.stats), job.files)
+            }
+            None => (self.session.impose_pdf(id, &spec, content).map_err(failed)?, None, Vec::new()),
+        };
         write_atomic(&path, &bytes)?;
+        // The cutter's files go beside the PDF: the same folder, so inside whatever root it is in.
+        let mut written = Vec::new();
+        for file in &files {
+            let at = path.with_file_name(&file.name);
+            write_atomic(&at, &file.bytes)?;
+            written.push(json!({ "path": at.to_string_lossy(), "bytes": file.bytes.len() }));
+        }
         let mut out = json!({ "sheets": sheets.len(), "up": up, "bytes": bytes.len(), "path": path.to_string_lossy() });
         if let (Some(stats), Some(cut)) = (stats, &cut) {
             // `empty` traces found nothing to cut (blank pages, or an offset that left nothing).
             out["cut"] = json!({ "paths": stats.paths, "traces": stats.traces, "empty": stats.empty, "spot": cut.paint.name });
+            if !written.is_empty() {
+                out["cut"]["cutter"] = Value::Array(written);
+            }
         }
         Ok(out)
     }

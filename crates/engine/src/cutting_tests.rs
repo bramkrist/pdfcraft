@@ -177,3 +177,53 @@ fn the_cut_line_is_drawn_round_the_disc_when_the_sheet_is_rendered() {
     let (first, last) = (*magenta.first().unwrap_or(&0) as f64 / 2.0, *magenta.last().unwrap_or(&0) as f64 / 2.0);
     assert_near(last - first, 2.0 * (30.0 + 2.0 * MM), "the line's width on the sheet");
 }
+
+/// 4 × 3 discs on a 480 × 320 mm sheet, kept 14 mm in from the edges: inside the marks (10 mm in).
+fn cutter_sheet() -> StepRepeat {
+    let mut spec = StepRepeat::new((480.0 * MM, 320.0 * MM));
+    spec.margins = pdfcraft_impose::Margins::uniform(14.0 * MM);
+    spec
+}
+
+fn cutter() -> pdfcraft_impose::CutterSpec {
+    pdfcraft_impose::CutterSpec { name: "271739".into(), layout: pdfcraft_impose::cutter::Layout::default() }
+}
+
+#[test]
+fn a_cutter_job_has_marks_on_the_sheet_and_a_plt_of_the_cut_lines() {
+    let mut session = Session::new();
+    let id: DocId = session.open_new("disc.pdf", Arc::new(disc_pdf())).expect("open");
+    let job = session.impose_cut_job(id, &cutter_sheet(), &at(1.0), Some(&cutter()), print::Content::default()).expect("job");
+    assert_eq!(job.files.len(), 1);
+    assert_eq!(job.files[0].name, "271739.plt");
+    let plt = String::from_utf8_lossy(&job.files[0].bytes).into_owned();
+    assert!(plt.starts_with("CR;NAME271739.plt;SIZE"), "{}", &plt[..60]);
+    // Every disc has a closed PU/PD shape in the file: as many as the sheet has cut lines.
+    assert_eq!(plt.matches("PU").count(), job.stats.paths + 1, "one shape each, and the final park");
+    // The lower-left mark is black where the sheet is rendered (10 mm in from both edges).
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(job.pdf), RenderConfig::default());
+    let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, tag: pdfcraft_render::PRINT_TAG, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let (w, h) = (page.width as usize, page.height as usize);
+    let at_mm = |x_mm: f64, y_mm: f64| {
+        let (x, y) = ((x_mm * MM) as usize, h - (y_mm * MM) as usize);
+        page.rgba.get((y * w + x) * 4..(y * w + x) * 4 + 3).map(|p| p.iter().map(|&v| u32::from(v)).sum::<u32>()).unwrap_or(u32::MAX)
+    };
+    for (x, y) in [(10.0, 10.0), (470.0, 10.0), (10.0, 310.0), (470.0, 310.0)] {
+        assert!(at_mm(x, y) < 150, "a mark at ({x}, {y}) mm: {}", at_mm(x, y));
+    }
+    assert!(at_mm(240.0, 100.0) > 300, "no mark in the middle of the sheet");
+    // Without a cutter, no files and no marks.
+    let plain = session.impose_cut_job(id, &cutter_sheet(), &at(1.0), None, print::Content::default()).expect("job");
+    assert!(plain.files.is_empty());
+}
+
+#[test]
+fn a_cutter_job_whose_cut_lines_run_off_the_marks_is_refused() {
+    let mut session = Session::new();
+    let id: DocId = session.open_new("disc.pdf", Arc::new(disc_pdf())).expect("open");
+    // Nine-up on a 106 mm sheet: the outer discs' lines come within 7 mm of its edge, outside the
+    // marks (10 mm in).
+    let err = session.impose_cut_job(id, &nine_up(), &at(1.0), Some(&cutter()), print::Content::default()).expect_err("refused");
+    assert!(err.to_string().contains("outside the registration marks"), "{err}");
+}
