@@ -181,6 +181,7 @@ function gridFields(withCopies) {
     ${num('gy', 'Jarak baris (mm)', 0, 'min="0"')}
     ${num('bleed', 'Bleed di file (mm)', 0, 'min="0"')}
     ${num('scalepct', 'Skala halaman (%)', 100, 'min="1" max="10000"')}
+    ${state.mode === 'repeat' ? num('cellw', 'Sel: lebar (mm, kosong = otomatis)', '', 'min="1"') + num('cellh', 'Sel: tinggi (mm, kosong = otomatis)', '', 'min="1"') + chk('fitcell', 'Pas-kan tiap halaman ke sel (tetap proporsional, jadi bisa ada sisa ruang)', false) : ''}
     ${sel('duplex', 'Sisi cetak', [['', '1 sisi'], ['long-edge', '2 sisi · balik sisi panjang'], ['short-edge', '2 sisi · balik sisi pendek']], '')}
     ${withCopies ? num('copies', 'Ulang blok', 2, 'min="1"') : ''}
     ${state.mode === 'repeat' ? chk('rotate', 'Optimalkan: putar sebagian baris 90° kalau muat lebih banyak (hati-hati saat potong, terutama 2 sisi)', false) : ''}`;
@@ -397,6 +398,11 @@ function job() {
   j.sheet_mm = sheet;
   if (val('orient') === 'best') j.sheet_orientation = 'best';
   if (state.mode === 'repeat' && val('rotate')) j.rotate = true;
+  if (state.mode === 'repeat') {
+    const cw = numOr('cellw', 0), ch = numOr('cellh', 0);
+    if (cw > 0 && ch > 0) j.cell_mm = [cw, ch];
+    if (val('fitcell')) j.fit_cell = true;
+  }
   const pct = numOr('scalepct', 100);
   if (pct !== 100) j.scale_percent = pct;
   j.margin_mm = numOr('margin', 5);
