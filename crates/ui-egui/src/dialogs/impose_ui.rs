@@ -104,6 +104,10 @@ pub struct ImposeDraft {
     pub rotate: bool,
     /// Page scale in percent (100: pages as they are).
     pub scale_pct: f64,
+    /// Step & repeat: a fixed cell in points (0 × 0: the page's own size) and whether each page is
+    /// scaled to fill it.
+    pub cell: (f64, f64),
+    pub fit_cell: bool,
     // Booklet.
     pub binding: usize,
     pub signature: usize,
@@ -146,6 +150,8 @@ impl Default for ImposeDraft {
             max_rows: 0,
             rotate: false,
             scale_pct: 100.0,
+            cell: (0.0, 0.0),
+            fit_cell: false,
             binding: 0,
             signature: 16,
             full_last: false,
@@ -273,6 +279,12 @@ impl ImposeDraft {
         s.marks = self.marks.then_some(self.mark);
         s.rotate = kind == ImposeKind::StepRepeat && self.rotate && self.max_cols == 0 && self.max_rows == 0;
         s.scale = self.scale_pct / 100.0;
+        if kind == ImposeKind::StepRepeat && self.cell.0 > 0.0 && self.cell.1 > 0.0 {
+            s.cell = Some(self.cell);
+            s.fit_cell = self.fit_cell;
+            // A fixed cell is what it is: no turning rows to make room.
+            s.rotate = false;
+        }
         s
     }
 
@@ -567,6 +579,20 @@ fn screen_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, kind: ImposeKind, unit: 
         ui.label(tl!("Page scale (%)"));
         ui.add(egui::DragValue::new(&mut d.scale_pct).range(1.0..=10_000.0).speed(1.0).max_decimals(1));
         ui.end_row();
+        if kind == ImposeKind::StepRepeat {
+            ui.label(tl!("Cell size (mm, 0 = the page's own size)"));
+            ui.horizontal(|ui| {
+                let (mut w, mut h) = (d.cell.0 / MM, d.cell.1 / MM);
+                ui.add(egui::DragValue::new(&mut w).range(0.0..=5000.0).speed(1.0).max_decimals(1));
+                ui.label("×");
+                ui.add(egui::DragValue::new(&mut h).range(0.0..=5000.0).speed(1.0).max_decimals(1));
+                d.cell = (w * MM, h * MM);
+            });
+            ui.end_row();
+            ui.label("");
+            ui.add_enabled(d.cell.0 > 0.0 && d.cell.1 > 0.0, widgets::checkbox(&mut d.fit_cell, tl!("Scale each page to fill its cell")));
+            ui.end_row();
+        }
     });
     if kind == ImposeKind::StepRepeat {
         let auto = d.max_cols == 0 && d.max_rows == 0;
@@ -817,6 +843,24 @@ mod tests {
         assert!(half.per_sheet >= full.per_sheet * 4, "{} against {}", half.per_sheet, full.per_sheet);
         d.scale_pct = 0.0;
         assert!(d.summary(ImposeKind::StepRepeat, &[A5]).is_err(), "no page is scaled to nothing");
+    }
+
+    #[test]
+    fn a_fixed_cell_fits_pages_of_any_shape() {
+        // A5 pages into 100 x 100 mm cells on SRA3: as many as the cells allow, and with
+        // fit-to-cell the page is drawn at the size of the cell, not its own.
+        let mut d = ImposeDraft { spacing: Spacing::None, marks: false, orient: Orient::Tall, preset: 3, ..Default::default() };
+        d.cell = (100.0 * MM, 100.0 * MM);
+        let fixed = d.summary(ImposeKind::StepRepeat, &[A5]).unwrap();
+        let (_, sheets) = d.layout(ImposeKind::StepRepeat, &[A5]).unwrap();
+        let pl = &sheets[0].placed[0];
+        assert!((pl.matrix.0[0] - 1.0).abs() < 1e-9, "without fit the page keeps its size");
+        d.fit_cell = true;
+        let (_, fitted) = d.layout(ImposeKind::StepRepeat, &[A5]).unwrap();
+        let m = fitted[0].placed[0].matrix.0;
+        // A5 is 148 x 210 mm: the long side goes into 100 mm.
+        assert!((m[0] - 100.0 / 210.0).abs() < 1e-6, "scaled by {}", m[0]);
+        assert_eq!(d.summary(ImposeKind::StepRepeat, &[A5]).unwrap().per_sheet, fixed.per_sheet);
     }
 
     #[test]
