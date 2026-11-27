@@ -304,3 +304,20 @@ fn cropping_is_all_or_nothing_and_refuses_nonsense() {
 fn parse_boxes(json: &str) -> Vec<CropBox> {
     serde_json::from_str(json).expect("boxes")
 }
+
+#[test]
+fn turning_rows_is_only_ever_a_suggestion_that_fits_at_least_as_many() {
+    // The page uses this to offer "Coba putar": the plain layout never turns a row,
+    // and the turned layout is shown only when it fits more.
+    let mut better = 0;
+    for page in [[210.0, 99.0], [90.0, 55.0], [100.0, 148.0], [60.0, 40.0], [120.0, 70.0], [70.0, 250.0]] {
+        let plain = layout(&[page], &job(r#"{"mode":"repeat","sheet_mm":[320,450],"margin_mm":5}"#)).expect("plain");
+        let turned = layout(&[page], &job(r#"{"mode":"repeat","sheet_mm":[320,450],"margin_mm":5,"rotate":true}"#)).expect("turned");
+        assert!(plain.sheets[0].cells.iter().all(|c| c.turn == 0), "no row is turned unless asked: {page:?}");
+        assert!(turned.up_per_sheet >= plain.up_per_sheet, "{page:?}: {} < {}", turned.up_per_sheet, plain.up_per_sheet);
+        if turned.up_per_sheet > plain.up_per_sheet {
+            better += 1;
+        }
+    }
+    assert!(better > 0, "at least one of these pages fits more when rows are turned");
+}
