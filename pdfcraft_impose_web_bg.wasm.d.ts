@@ -5,6 +5,7 @@ export const __wbg_converted_free: (a: number, b: number) => void;
 export const assemblePages: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const converted_bytes: (a: number) => [number, number];
 export const converted_report: (a: number) => [number, number];
+export const cropPages: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];

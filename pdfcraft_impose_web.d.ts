@@ -19,6 +19,12 @@ export class Converted {
 export function assemblePages(pdf: Uint8Array, extras: Uint8Array, extra_lengths: Uint32Array, plan_json: string): Uint8Array;
 
 /**
+ * `cropPages(pdfBytes, boxesJson)`: `[{"page": 0, "rect": [l, b, r, t]}, …]` in PDF user space
+ * becomes each page's crop box.
+ */
+export function cropPages(pdf: Uint8Array, boxes_json: string): Uint8Array;
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  */
 export function impose(pdf: Uint8Array, job_json: string): Uint8Array;
@@ -66,6 +72,7 @@ export interface InitOutput {
     readonly assemblePages: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly converted_bytes: (a: number) => [number, number];
     readonly converted_report: (a: number) => [number, number];
+    readonly cropPages: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];

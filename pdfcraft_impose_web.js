@@ -75,6 +75,27 @@ export function assemblePages(pdf, extras, extra_lengths, plan_json) {
 }
 
 /**
+ * `cropPages(pdfBytes, boxesJson)`: `[{"page": 0, "rect": [l, b, r, t]}, …]` in PDF user space
+ * becomes each page's crop box.
+ * @param {Uint8Array} pdf
+ * @param {string} boxes_json
+ * @returns {Uint8Array}
+ */
+export function cropPages(pdf, boxes_json) {
+    const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(boxes_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.cropPages(ptr0, len0, ptr1, len1);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  * @param {Uint8Array} pdf
  * @param {string} job_json
