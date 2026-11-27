@@ -358,6 +358,20 @@ impl ImposeDraft {
         self.two_up.then_some(impose::TwoUp { sheet: (w * MM, h * MM), margin: self.big_margin, gap: self.big_gap, marks: self.big_marks })
     }
 
+    /// What turning rows would give, when it would fit more copies on a sheet than the layout
+    /// now does: `(copies now, copies with rows turned)`. Only a suggestion; nothing turns until
+    /// the person asks (`rotate`). `None` when rows are already turned, can't be (a fixed cell,
+    /// or fixed columns/rows), or turning would not help.
+    pub fn turn_hint(&self, kind: ImposeKind, sizes: &[(f64, f64)]) -> Option<(usize, usize)> {
+        let fixed_cell = self.cell.0 > 0.0 && self.cell.1 > 0.0;
+        if kind != ImposeKind::StepRepeat || self.rotate || fixed_cell || self.max_cols != 0 || self.max_rows != 0 {
+            return None;
+        }
+        let now = self.summary(kind, sizes).ok()?.per_sheet;
+        let turned = ImposeDraft { rotate: true, ..self.clone() }.summary(kind, sizes).ok()?.per_sheet;
+        (turned > now).then_some((now, turned))
+    }
+
     /// The summary of what Finish would make from pages of `sizes`.
     pub fn summary(&self, kind: ImposeKind, sizes: &[(f64, f64)]) -> Result<Summary, String> {
         match kind {
@@ -758,6 +772,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: I
         ui.vertical(|ui| {
             let s = d.summary(kind, &sizes);
             summary_ui(ui, &s, unit, t);
+            if let Some((now, turned)) = d.turn_hint(kind, &sizes) {
+                ui.add_space(6.0);
+                ui.set_max_width(200.0);
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("Turning rows would fit {turned} copies per sheet instead of {now}. Careful when cutting, especially two-sided."),
+                        &[("turned", &turned.to_string()), ("now", &now.to_string())],
+                    ))
+                    .small(),
+                );
+                if ui.button(tl!("Try turning rows")).clicked() {
+                    d.rotate = true;
+                }
+            }
         });
     });
     ui.add_space(12.0);
@@ -906,6 +934,20 @@ mod tests {
         assert_eq!(s.per_sheet, 28);
         let d = ImposeDraft { rotate: false, orient: Orient::Wide, ..Default::default() };
         assert_eq!(d.summary(ImposeKind::StepRepeat, &[card]).unwrap().layout, "5 × 5");
+    }
+
+    #[test]
+    fn turning_rows_is_suggested_only_when_it_fits_more_and_never_done_unasked() {
+        let card = (90.0 * MM, 55.0 * MM);
+        let d = ImposeDraft { orient: Orient::Wide, ..Default::default() };
+        let (now, turned) = d.turn_hint(ImposeKind::StepRepeat, &[card]).expect("business cards gain from turned rows");
+        assert!(turned > now);
+        assert_eq!(d.summary(ImposeKind::StepRepeat, &[card]).unwrap().per_sheet, now, "the layout itself stays unturned");
+        // Already turned, a fixed cell, fixed columns, or another kind: no suggestion.
+        assert!(ImposeDraft { rotate: true, ..d.clone() }.turn_hint(ImposeKind::StepRepeat, &[card]).is_none());
+        assert!(ImposeDraft { cell: (90.0 * MM, 55.0 * MM), ..d.clone() }.turn_hint(ImposeKind::StepRepeat, &[card]).is_none());
+        assert!(ImposeDraft { max_cols: 3, ..d.clone() }.turn_hint(ImposeKind::StepRepeat, &[card]).is_none());
+        assert!(d.turn_hint(ImposeKind::NUp, &[card]).is_none());
     }
 
     #[test]
