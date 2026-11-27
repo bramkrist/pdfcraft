@@ -207,7 +207,7 @@ pub struct Summary {
 }
 
 /// The four corners of `clip` through `m`, as a box.
-fn footprint(m: [f64; 6], clip: [f64; 4]) -> [f64; 4] {
+pub(crate) fn footprint(m: [f64; 6], clip: [f64; 4]) -> [f64; 4] {
     let [a, b, c, d, e, f] = m;
     let pts = [(clip[0], clip[1]), (clip[2], clip[1]), (clip[0], clip[3]), (clip[2], clip[3])];
     let mut r = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];

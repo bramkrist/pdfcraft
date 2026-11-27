@@ -123,6 +123,8 @@ pub enum Dialog {
     AddBleed,
     /// Imposing ▸ Step and repeat, n-up pages, Create booklet: the imposition wizards.
     Impose(crate::impose_ui::ImposeKind),
+    /// Imposing ▸ Manual: pages placed by hand on the sheet.
+    ImposeManual,
     /// Add / Update Header and Footer, Watermark, Background.
     Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.
