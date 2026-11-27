@@ -5228,6 +5228,43 @@ fn imposing_on_press_sheets_through_tools() {
 }
 
 #[test]
+fn cut_lines_on_press_sheets_through_tools() {
+    let dir = workdir("cutlines");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let plain = ok(&mut a, "doc_impose", json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "scale_percent": 50, "path": "plain.pdf" }));
+    assert!(plain.get("cut").is_none(), "no cut lines unless asked: {plain}");
+    let cut = ok(
+        &mut a,
+        "doc_impose",
+        json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "scale_percent": 50, "cut_offset_mm": 1, "cut_spot": "Thru-cut", "path": "cut.pdf" }),
+    );
+    assert!(cut["cut"]["paths"].as_u64().unwrap() >= 1, "{cut}");
+    assert_eq!(cut["cut"]["spot"], "Thru-cut");
+    assert_eq!(cut["sheets"], plain["sheets"], "the layout is the same with or without cut lines");
+    assert!(cut["bytes"].as_u64() > plain["bytes"].as_u64(), "the lines and their layer are extra");
+    // Inside the artwork, and with every hole cut, are the other two ways.
+    for extra in [json!({ "cut_offset_mm": -0.5 }), json!({ "cut_offset_mm": 0, "cut_holes": "keep", "cut_background": "white" })] {
+        let mut args = json!({ "doc": doc, "sheet": "SRA3", "margin_mm": 0, "path": "more.pdf" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        ok(&mut a, "doc_impose", args);
+    }
+    for bad in [
+        json!({ "doc": doc, "sheet": "A4", "cut_holes": "keep", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_spot": "Cut", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cut_holes": "some", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cut_background": "pink", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": "far", "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1e9, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cut_width_pt": 0, "path": "x.pdf" }),
+        json!({ "doc": doc, "sheet": "A4", "cut_offset_mm": 1, "cut_min_area_mm2": -1, "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_impose", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused request writes nothing");
+}
+
+#[test]
 fn making_a_booklet_through_tools() {
     let dir = workdir("booklet");
     let mut a = auto(&dir);

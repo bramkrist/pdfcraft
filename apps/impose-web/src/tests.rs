@@ -321,3 +321,111 @@ fn turning_rows_is_only_ever_a_suggestion_that_fits_at_least_as_many() {
     }
     assert!(better > 0, "at least one of these pages fits more when rows are turned");
 }
+
+// ---- sticker cut lines ------------------------------------------------------------------
+
+/// A 100 × 100 pt page of the test PDF drawn at 2 pixels a point as a straight RGBA canvas: a
+/// solid disc of radius 30 at the middle on a clear background.
+fn disc_canvas(need: &CutNeed) -> (Vec<u8>, usize, usize) {
+    let (w, h) = ((need.size_pt[0] * need.px_per_pt).ceil() as usize, (need.size_pt[1] * need.px_per_pt).ceil() as usize);
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = ((x as f64 + 0.5) / w as f64 * need.size_pt[0], (y as f64 + 0.5) / h as f64 * need.size_pt[1]);
+            if (px - 50.0).hypot(py - 50.0) <= 30.0 {
+                rgba[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[0, 100, 255, 255]);
+            }
+        }
+    }
+    (rgba, w, h)
+}
+
+fn sticker_job() -> Job {
+    job(r#"{"mode":"repeat","sheet_mm":[210,297],"margin_mm":5,"gutter_mm":[2,2]}"#)
+}
+
+fn cut(offset_mm: f64) -> CutMm {
+    CutMm { offset_mm, ..CutMm::default() }
+}
+
+/// What the browser does: draw every page the layout needs, trace it, and hand the lines back.
+fn browser_round_trip(pdf: &[u8], job: &Job, cut: &CutMm) -> (Vec<u8>, usize) {
+    let needs = cut_needs(pdf.to_vec(), job, cut).expect("needs");
+    let outlines: Vec<CutOutline> = needs
+        .iter()
+        .map(|need| {
+            let (rgba, w, h) = disc_canvas(need);
+            trace_cut(&rgba, w, h, need, cut).expect("trace")
+        })
+        .collect();
+    impose_cut(pdf.to_vec(), job, cut, &outlines).expect("impose")
+}
+
+#[test]
+fn every_distinct_placement_is_drawn_once_however_often_it_repeats() {
+    let needs = cut_needs(pdf(1, 100, 100), &sticker_job(), &cut(0.0)).expect("needs");
+    assert_eq!(needs.len(), 1);
+    assert_eq!((needs[0].page, needs[0].size_pt), (0, [100.0, 100.0]));
+    // A tenth of a millimetre a pixel.
+    assert!((needs[0].px_per_pt - 254.0 / 72.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_browser_round_trip_writes_one_cut_line_per_copy_on_a_cut_layer() {
+    let job = sticker_job();
+    let up = layout(&[[pt_to_mm(100.0), pt_to_mm(100.0)]], &job).expect("layout").up_per_sheet;
+    assert!(up > 4, "{up}");
+    let (bytes, paths) = browser_round_trip(&pdf(1, 100, 100), &job, &cut(1.0));
+    assert_eq!(paths, up, "one line for each copy");
+    let doc = Document::open(Arc::new(bytes.clone())).expect("reopen");
+    let root = doc.trailer().get(b"Root").and_then(|r| doc.resolve(r).as_dict().cloned()).expect("root");
+    assert!(root.get(b"OCProperties").is_some(), "the Cut layer is in the catalogue");
+    // Without cut lines the same layout has no layer.
+    let plain = impose(pdf(1, 100, 100), &job).expect("impose");
+    let doc = Document::open(Arc::new(plain)).expect("reopen");
+    let root = doc.trailer().get(b"Root").and_then(|r| doc.resolve(r).as_dict().cloned()).expect("root");
+    assert!(root.get(b"OCProperties").is_none());
+}
+
+fn pt_to_mm(v: f64) -> f64 {
+    mm(v)
+}
+
+#[test]
+fn the_offset_moves_the_traced_line_in_the_page_space() {
+    let radius = |offset: f64| {
+        let need = cut_needs(pdf(1, 100, 100), &sticker_job(), &cut(offset)).expect("needs").remove(0);
+        let (rgba, w, h) = disc_canvas(&need);
+        let found = trace_cut(&rgba, w, h, &need, &cut(offset)).expect("trace");
+        let xs = found.loops.iter().flatten().map(|p| p[0]);
+        (xs.clone().fold(f64::MIN, f64::max) - xs.fold(f64::MAX, f64::min)) / 2.0
+    };
+    assert!((radius(0.0) - 30.0).abs() < 0.3, "{}", radius(0.0));
+    assert!((radius(2.0) - (30.0 + pt(2.0))).abs() < 0.3, "{}", radius(2.0));
+    assert!((radius(-2.0) - (30.0 - pt(2.0))).abs() < 0.3, "{}", radius(-2.0));
+}
+
+#[test]
+fn a_placement_nobody_traced_is_refused_rather_than_left_uncut() {
+    let err = impose_cut(pdf(1, 100, 100), &sticker_job(), &cut(0.0), &[]).expect_err("no outlines");
+    assert!(err.contains("no cut line was traced"), "{err}");
+}
+
+#[test]
+fn cut_lines_are_for_the_grid_modes_and_bad_settings_are_refused() {
+    let booklet = job(r#"{"mode":"booklet","sheet_mm":[297,210]}"#);
+    assert!(cut_needs(pdf(4, 100, 100), &booklet, &cut(0.0)).is_err());
+    for bad in [
+        CutMm { offset_mm: 1e9, ..CutMm::default() },
+        CutMm { offset_mm: f64::NAN, ..CutMm::default() },
+        CutMm { holes: Some("some".into()), ..CutMm::default() },
+        CutMm { background: Some("pink".into()), ..CutMm::default() },
+        CutMm { width_pt: Some(0.0), ..CutMm::default() },
+        CutMm { min_area_mm2: Some(-1.0), ..CutMm::default() },
+    ] {
+        assert!(cut_needs(pdf(1, 100, 100), &sticker_job(), &bad).is_err(), "{bad:?}");
+    }
+    // A drawing whose pixels do not match its size is refused, not traced wrongly.
+    let need = cut_needs(pdf(1, 100, 100), &sticker_job(), &cut(0.0)).expect("needs").remove(0);
+    assert!(trace_cut(&[0; 16], 3, 1, &need, &cut(0.0)).is_err());
+}

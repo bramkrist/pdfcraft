@@ -1245,3 +1245,134 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }
+
+// ---- cut lines (sticker die-cut / kiss-cut contours) ----
+
+/// A 100 × 100 sheet holding only `cuts`.
+fn cut_sheet(cuts: Vec<Vec<(f64, f64)>>) -> Sheet {
+    Sheet { size: (100.0, 100.0), cuts, cut_paint: CutPaint { name: "CutContour".into(), width: 2.0 }, ..Sheet::default() }
+}
+
+fn square_cut() -> Vec<(f64, f64)> {
+    vec![(20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)]
+}
+
+/// All decoded streams of `doc` joined.
+fn all_streams(doc: &Document) -> String {
+    doc.object_numbers()
+        .into_iter()
+        .filter_map(|n| match &*doc.get(ObjRef::new(n, doc.generation(n))) {
+            Object::Stream(s) => s.decoded().ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn catalog(doc: &Document) -> Dict {
+    let root = doc.trailer().get(b"Root").cloned().unwrap();
+    doc.resolve(&root).as_dict().cloned().unwrap()
+}
+
+fn first_page_resources(doc: &Document) -> Dict {
+    let page = pdfcraft_model::pages(doc).remove(0);
+    let res = page.dict.get(b"Resources").cloned().unwrap();
+    doc.resolve(&res).as_dict().cloned().unwrap()
+}
+
+#[test]
+fn cut_lines_are_a_spot_colour_on_their_own_layer() {
+    let src = fixture(1);
+    let bytes = impose_sheets(&src, &[cut_sheet(vec![square_cut()])], Content::Document).unwrap();
+    let out = Document::open(Arc::new(bytes.clone())).unwrap();
+    let content = all_streams(&out);
+    assert!(content.contains("/OC /CutOC BDC"), "{content}");
+    assert!(content.contains("/CSCut CS 1 SCN 2 w") && content.contains("20 20 m\n80 20 l\n80 80 l\n20 80 l\nh S\nEMC Q"), "{content}");
+    // The spot colour carries the cutter's name.
+    let res = first_page_resources(&out);
+    let spaces = out.resolve(res.get(b"ColorSpace").unwrap()).as_dict().cloned().unwrap();
+    let space = out.resolve(spaces.get(b"CSCut").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(space.first(), Some(&Object::name("Separation")));
+    assert_eq!(space.get(1), Some(&Object::name("CutContour")));
+    // The layer is in the catalogue, listed and named Cut.
+    let props = out.resolve(catalog(&out).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let groups = out.resolve(props.get(b"OCGs").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(groups.len(), 1);
+    let group = out.resolve(&groups[0]).as_dict().cloned().unwrap();
+    assert_eq!(group.get(b"Name"), Some(&Object::String(pdfcraft_cos::PdfString::text("Cut"))));
+    // And the page uses that very group.
+    let properties = out.resolve(res.get(b"Properties").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(properties.get(b"CutOC"), Some(&groups[0]));
+}
+
+#[test]
+fn cut_lines_render_in_the_spot_colours_stand_in() {
+    let src = fixture(1);
+    let bytes = impose_sheets(&src, &[cut_sheet(vec![square_cut()])], Content::Document).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let page = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 4.0, ..Default::default() });
+    assert_eq!((page.width, page.height), (400, 400), "{:?}", page.error);
+    let px = |x: usize, y: usize| -> [u8; 4] { page.rgba[(y * 400 + x) * 4..][..4].try_into().unwrap() };
+    // The left edge of the square at x = 20 pt, halfway up the sheet (row 200).
+    let [red, green, blue, _] = px(80, 200);
+    assert!(red > 200 && green < 80 && blue > 100, "the cut line shows magenta, got {:?}", px(80, 200));
+    assert_eq!(px(200, 200), [255, 255, 255, 255], "inside the square stays paper");
+}
+
+#[test]
+fn the_cut_layer_joins_the_layers_the_document_already_has() {
+    let mut src = fixture(1);
+    let mut group = Dict::new();
+    group.set(b"Name".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Art")));
+    let existing = src.add(Object::Dict(group));
+    let mut d = Dict::new();
+    d.set(b"BaseState".to_vec(), Object::name("OFF"));
+    d.set(b"Order".to_vec(), Object::Array(vec![Object::Ref(existing)]));
+    let mut props = Dict::new();
+    props.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(existing)]));
+    props.set(b"D".to_vec(), Object::Dict(d));
+    let root = src.trailer().get(b"Root").cloned().unwrap();
+    let Object::Ref(root) = root else { panic!("root is a reference") };
+    src.update_dict(root, |c| c.set(b"OCProperties".to_vec(), Object::Dict(props))).unwrap();
+    let bytes = impose_sheets(&src, &[cut_sheet(vec![square_cut()])], Content::Document).unwrap();
+    let out = Document::open(Arc::new(bytes)).unwrap();
+    let props = out.resolve(catalog(&out).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let groups = out.resolve(props.get(b"OCGs").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(groups.len(), 2, "the document's own layer is kept and the cut layer added");
+    let name_of = |g: &Object| (*out.resolve(out.resolve(g).as_dict().unwrap().get(b"Name").unwrap())).clone();
+    assert_eq!(name_of(&groups[0]), Object::String(pdfcraft_cos::PdfString::text("Art")), "the document's own layer comes first");
+    assert_eq!(name_of(&groups[1]), Object::String(pdfcraft_cos::PdfString::text("Cut")));
+    let config = out.resolve(props.get(b"D").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(out.resolve(config.get(b"Order").unwrap()).as_array().map(Vec::len), Some(2));
+    // Everything else was off by default; the cut layer must not be.
+    let on = out.resolve(config.get(b"ON").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(on, vec![groups[1].clone()]);
+}
+
+#[test]
+fn sheets_without_cut_lines_gain_no_layer_or_colour() {
+    let src = fixture(1);
+    let bytes = impose_sheets(&src, &[cut_sheet(Vec::new())], Content::Document).unwrap();
+    let out = Document::open(Arc::new(bytes)).unwrap();
+    assert!(catalog(&out).get(b"OCProperties").is_none());
+    assert!(first_page_resources(&out).get(b"ColorSpace").is_none());
+    assert!(!all_streams(&out).contains("CutOC"));
+}
+
+#[test]
+fn unusable_cut_paths_are_skipped_and_the_spot_name_is_made_safe() {
+    let src = fixture(1);
+    let junk = vec![vec![(1.0, 1.0), (2.0, 2.0)], vec![(0.0, 0.0), (f64::NAN, 1.0), (5.0, 5.0)], square_cut()];
+    let mut sheet = cut_sheet(junk);
+    sheet.cut_paint.name = "Cut Contour/#1<>".into();
+    let out = Document::open(Arc::new(impose_sheets(&src, &[sheet], Content::Document).unwrap())).unwrap();
+    let content = all_streams(&out);
+    assert_eq!(content.matches(" m\n").count(), 1, "only the square is drawn: {content}");
+    let res = first_page_resources(&out);
+    let spaces = out.resolve(res.get(b"ColorSpace").unwrap()).as_dict().cloned().unwrap();
+    let space = out.resolve(spaces.get(b"CSCut").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(space.get(1), Some(&Object::name("CutContour1")));
+    // Nothing usable at all: no layer.
+    let none = Document::open(Arc::new(impose_sheets(&src, &[cut_sheet(vec![vec![(1.0, 1.0)]])], Content::Document).unwrap())).unwrap();
+    assert!(catalog(&none).get(b"OCProperties").is_none());
+}

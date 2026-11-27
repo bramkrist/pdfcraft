@@ -20,6 +20,8 @@
 //!   worked out as for step & repeat.
 //! - **Booklets** ([`booklet()`]): saddle-stitched, perfect-bound (signatures) and continuous page
 //!   order, two pages to a sheet side.
+//! - **Cut lines** ([`CutSpec`], [`cut_requests`], [`place_cuts`]): a die-cut or kiss-cut contour
+//!   around every placed page, for stickers. The tracing itself is `pdfcraft-cutline`'s.
 //!
 //! All lengths are PDF points (1/72 inch). Sheet space has its origin at the lower left, y up.
 
@@ -27,11 +29,17 @@
 
 mod bleed;
 mod booklet;
+mod cut;
+#[cfg(test)]
+mod cut_tests;
 mod manual;
 
 pub use bleed::{AddBleed, BleedMethod, add_bleed};
 pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
+pub use cut::{CutRequest, CutSpec, Outline, Raster, cut_requests, place_cuts, placement_scale, trace_page, trace_resolution};
 pub use manual::{Manual, ManualPage, manual};
+/// Contour tracing, for the settings of [`CutSpec`] (`Holes`, `Background`) and the tracer itself.
+pub use pdfcraft_cutline as cutline;
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::Document;

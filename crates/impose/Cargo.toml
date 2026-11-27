@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-cutline = { workspace = true }
 pdfcraft-print = { workspace = true }
 thiserror = { workspace = true }
 

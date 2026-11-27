@@ -1,0 +1,11 @@
+[package]
+name = "pdfcraft-cutline"
+description = "Cut-contour tracing for PdfCraft: the outline of a raster silhouette, grown or shrunk by an exact distance, as closed polygons (die-cut and kiss-cut stickers)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

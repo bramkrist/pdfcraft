@@ -281,6 +281,7 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
     let views: Vec<[f64; 6]> = pages.iter().map(|p| p.view_matrix(src)).collect();
     let pages_root = doc.add(Object::Null);
     let mut kids = Vec::new();
+    let cut_layer = sheets.iter().any(|s| !cut_paths(s).is_empty()).then(|| add_cut_layer(&mut doc));
     for sheet in sheets {
         let mut c = String::new();
         let mut xo = Dict::new();
@@ -336,12 +337,23 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
             }
             c.push_str("Q\n");
         }
+        let cuts = cut_paths(sheet);
+        if !cuts.is_empty() {
+            c.push_str(&cut_operators(&cuts, sheet.cut_paint.width));
+        }
         let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), c.as_bytes())));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xo));
+        let mut cs = Dict::new();
         if sheet.marks_paint.registration && (!sheet.borders.is_empty() || !sheet.lines.is_empty()) {
-            let mut cs = Dict::new();
             cs.set(b"CSReg".to_vec(), registration_colour_space(&mut doc));
+        }
+        if let (false, Some(layer)) = (cuts.is_empty(), cut_layer) {
+            cs.set(b"CSCut".to_vec(), cut_colour_space(&mut doc, &sheet.cut_paint.name));
+            res.set(b"Properties".to_vec(), Object::Dict(single(CUT_PROPERTY, Object::Ref(layer))));
+            res.set(b"ExtGState".to_vec(), Object::Dict(single(b"GSCut", Object::Dict(cut_overprint()))));
+        }
+        if !cs.is_empty() {
             res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
         }
         let mut p = Dict::new();
@@ -368,8 +380,10 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
     // Keep the layers' configuration, or a layer that is off in the document would print: the
     // pages' marked content still refers to its groups, and without this nothing says they are off.
     let root_of = |key: &[u8]| src.trailer().get(b"Root").and_then(|r| src.resolve(r).as_dict().and_then(|root| root.get(key).cloned()));
-    if let Some(layers) = root_of(b"OCProperties") {
-        cat.set(b"OCProperties".to_vec(), layers);
+    match (root_of(b"OCProperties"), cut_layer) {
+        (existing, Some(layer)) => cat.set(b"OCProperties".to_vec(), layers_with_cut(src, existing, layer)),
+        (Some(layers), None) => cat.set(b"OCProperties".to_vec(), layers),
+        (None, None) => {}
     }
     // The output condition (PDF/X, PDF/A) describes the colours of the content the sheets still
     // carry untouched; dropping it would leave device colours with no stated print condition.
@@ -383,6 +397,92 @@ fn write_sheets(src: &Document, pages: &[pdfcraft_model::Page], sheets: &[Sheet]
         doc.remove_encryption();
     }
     Ok(write_full(&doc, &SaveOptions::default())?)
+}
+
+/// The name the cut layer's properties entry has in each sheet's resources.
+const CUT_PROPERTY: &[u8] = b"CutOC";
+
+/// The sheet's cut lines that can be drawn: closed polygons of at least three finite points.
+fn cut_paths(sheet: &Sheet) -> Vec<&[(f64, f64)]> {
+    sheet.cuts.iter().map(Vec::as_slice).filter(|p| p.len() >= 3 && p.iter().all(|(x, y)| x.is_finite() && y.is_finite())).collect()
+}
+
+/// The operators drawing `paths` as one marked-content group of the cut layer, in the spot colour
+/// `CSCut` and the extended state `GSCut` of the sheet's resources.
+fn cut_operators(paths: &[&[(f64, f64)]], width: f64) -> String {
+    let width = if width.is_finite() && width > 0.0 { width } else { 0.25 };
+    let mut out = format!("q /OC /{} BDC /GSCut gs /CSCut CS 1 SCN {} w 1 j 1 J\n", String::from_utf8_lossy(CUT_PROPERTY), n(width));
+    for path in paths {
+        for (i, (x, y)) in path.iter().enumerate() {
+            out.push_str(&format!("{} {} {}\n", n(*x), n(*y), if i == 0 { "m" } else { "l" }));
+        }
+        out.push_str("h S\n");
+    }
+    out.push_str("EMC Q\n");
+    out
+}
+
+/// A dictionary of one entry.
+fn single(key: &[u8], value: Object) -> Dict {
+    let mut d = Dict::new();
+    d.set(key.to_vec(), value);
+    d
+}
+
+/// Overprint, so the cut line never knocks the artwork out of the plates it lies on.
+fn cut_overprint() -> Dict {
+    let mut d = Dict::new();
+    d.set(b"OP".to_vec(), Object::Bool(true));
+    d.set(b"op".to_vec(), Object::Bool(true));
+    d.set(b"OPM".to_vec(), Object::Int(1));
+    d
+}
+
+/// The optional content group the cut lines belong to, so a cutter or RIP plug-in (or a person
+/// in the layers panel) can pick them out.
+fn add_cut_layer(doc: &mut Document) -> ObjRef {
+    let mut group = Dict::new();
+    group.set(b"Type".to_vec(), Object::name("OCG"));
+    group.set(b"Name".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Cut")));
+    doc.add(Object::Dict(group))
+}
+
+/// `[/Separation /<name> /DeviceCMYK <tint>]` with full tint in magenta as the on-screen stand-in,
+/// the colour cutter plug-ins expect a cut contour to show in.
+fn cut_colour_space(doc: &mut Document, name: &str) -> Object {
+    let name: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).collect();
+    let name = if name.is_empty() { "CutContour".to_string() } else { name };
+    let mut f = Dict::new();
+    f.set(b"FunctionType".to_vec(), Object::Int(2));
+    f.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    f.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    f.set(b"C1".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(0)]));
+    f.set(b"N".to_vec(), Object::Int(1));
+    let tint = doc.add(Object::Dict(f));
+    Object::Array(vec![Object::name("Separation"), Object::name(&name), Object::name("DeviceCMYK"), Object::Ref(tint)])
+}
+
+/// The document's layer configuration with the cut layer added: on, and listed with the others.
+fn layers_with_cut(src: &Document, existing: Option<Object>, layer: ObjRef) -> Object {
+    let dict_of = |o: &Object| src.resolve(o).as_dict().cloned();
+    let array_of = |o: &Object| src.resolve(o).as_array().cloned();
+    let mut props = existing.as_ref().and_then(dict_of).unwrap_or_default();
+    let mut groups = props.get(b"OCGs").and_then(array_of).unwrap_or_default();
+    groups.push(Object::Ref(layer));
+    props.set(b"OCGs".to_vec(), Object::Array(groups));
+    let mut config = props.get(b"D").and_then(dict_of).unwrap_or_default();
+    if let Some(mut order) = config.get(b"Order").and_then(array_of) {
+        order.push(Object::Ref(layer));
+        config.set(b"Order".to_vec(), Object::Array(order));
+    }
+    // With every other layer off by default the new one must be listed on.
+    if config.name(b"BaseState") == Some(b"OFF".as_slice()) {
+        let mut on = config.get(b"ON").and_then(array_of).unwrap_or_default();
+        on.push(Object::Ref(layer));
+        config.set(b"ON".to_vec(), Object::Array(on));
+    }
+    props.set(b"D".to_vec(), Object::Dict(config));
+    Object::Dict(props)
 }
 
 /// Which source pages land on each sheet (for previews and the sheet count).

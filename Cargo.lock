@@ -4376,6 +4376,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-cutline"
+version = "0.18.1"
+
+[[package]]
 name = "pdfcraft-edit"
 version = "0.18.1"
 dependencies = [
@@ -4491,6 +4495,7 @@ version = "0.18.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-cutline",
  "pdfcraft-print",
  "pdfcraft-render",
  "thiserror 2.0.21",

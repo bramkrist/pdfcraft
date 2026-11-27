@@ -2,8 +2,10 @@
 //! booklets) onto press sheets, `doc_impose_manual` (every page placed by hand) and `doc_bleed`
 //! (generated bleed).
 
+use pdfcraft_engine::impose::cutline::{Background, Holes};
 use pdfcraft_engine::impose::{
-    self, AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks, StepRepeat,
+    self, AddBleed, Align, Binding, BleedMethod, Booklet, CutSpec, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks,
+    StepRepeat,
 };
 use pdfcraft_engine::print::Content;
 use serde_json::{Value, json};
@@ -77,6 +79,54 @@ fn count(a: &Args, key: &str) -> Result<Option<usize>> {
 /// `key` in millimetres as points.
 fn mm(a: &Args, key: &str) -> Result<Option<f64>> {
     Ok(a.opt_num(key)?.map(|v| v * MM))
+}
+
+/// The cut lines `cut_offset_mm` asks for, or `None` when it is not given. The offset is signed:
+/// positive cuts outside the artwork, negative inside it, zero on its edge. The other `cut_*`
+/// arguments refine it and are refused without it.
+fn cut_arg(a: &Args) -> Result<Option<CutSpec>> {
+    let Some(offset) = mm(a, "cut_offset_mm")? else {
+        for key in ["cut_holes", "cut_background", "cut_spot", "cut_width_pt", "cut_min_area_mm2"] {
+            if a.get(key).is_some() {
+                return Err(bad(format!("{key} needs cut_offset_mm (0 cuts on the artwork's edge)")));
+            }
+        }
+        return Ok(None);
+    };
+    // A cutter works within a few millimetres; a wild number is a typo, and the tracer's own
+    // limit is in pixels, so refuse it here with a message about the argument.
+    if !offset.is_finite() || offset.abs() > 100.0 * MM {
+        return Err(bad("cut_offset_mm must be between -100 and 100"));
+    }
+    let mut cut = CutSpec::new();
+    cut.offset = offset;
+    cut.holes = match a.opt_str("cut_holes")?.unwrap_or("fill") {
+        "fill" => Holes::Fill,
+        "keep" => Holes::Keep,
+        h => return Err(bad(format!("unknown cut_holes {h:?}"))),
+    };
+    cut.background = match a.opt_str("cut_background")?.unwrap_or("auto") {
+        "auto" => Background::Auto,
+        "transparent" => Background::Transparent,
+        "white" => Background::White,
+        b => return Err(bad(format!("unknown cut_background {b:?}"))),
+    };
+    if let Some(name) = a.opt_str("cut_spot")? {
+        cut.paint.name = name.to_string();
+    }
+    if let Some(width) = a.opt_num("cut_width_pt")? {
+        if !(width.is_finite() && width > 0.0 && width <= 100.0) {
+            return Err(bad("cut_width_pt must be greater than 0 and at most 100"));
+        }
+        cut.paint.width = width;
+    }
+    if let Some(area) = a.opt_num("cut_min_area_mm2")? {
+        if !(area.is_finite() && (0.0..=1e6).contains(&area)) {
+            return Err(bad("cut_min_area_mm2 must be between 0 and 1000000"));
+        }
+        cut.min_area = area * MM * MM;
+    }
+    Ok(Some(cut))
 }
 
 /// What prints besides the page content: `comments_forms`.
@@ -184,10 +234,22 @@ impl Automation {
         let content = content_arg(a)?;
         let sheets = impose::step_and_repeat(&sizes, &spec).map_err(|e| bad(e.to_string()))?;
         let up = sheets.iter().map(|s| s.placed.len()).max().unwrap_or(0);
-        let bytes = self.session.impose_pdf(id, &spec, content).map_err(failed)?;
+        let cut = cut_arg(a)?;
+        let (bytes, stats) = match &cut {
+            Some(cut) => {
+                let (bytes, stats) = self.session.impose_cut_pdf(id, &spec, cut, content).map_err(failed)?;
+                (bytes, Some(stats))
+            }
+            None => (self.session.impose_pdf(id, &spec, content).map_err(failed)?, None),
+        };
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
-        Ok(json!({ "sheets": sheets.len(), "up": up, "bytes": bytes.len(), "path": path.to_string_lossy() }))
+        let mut out = json!({ "sheets": sheets.len(), "up": up, "bytes": bytes.len(), "path": path.to_string_lossy() });
+        if let (Some(stats), Some(cut)) = (stats, &cut) {
+            // `empty` traces found nothing to cut (blank pages, or an offset that left nothing).
+            out["cut"] = json!({ "paths": stats.paths, "traces": stats.traces, "empty": stats.empty, "spot": cut.paint.name });
+        }
+        Ok(out)
     }
 
     /// `doc_booklet`: make the document into a booklet and save the print-ready PDF.

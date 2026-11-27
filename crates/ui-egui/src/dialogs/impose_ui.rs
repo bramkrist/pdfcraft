@@ -4,7 +4,10 @@
 //! come from `pdfcraft-impose` through the session; the original document is never changed.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::impose::{self, Align as BookletAlign, Binding, Booklet, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat};
+use pdfcraft_engine::impose::cutline::Holes;
+use pdfcraft_engine::impose::{
+    self, Align as BookletAlign, Binding, Booklet, CutSpec, Duplex, Fill, LastSignature, Margins, MarkStyle, Marks, StepRepeat,
+};
 use pdfcraft_engine::print::Sheet;
 
 use crate::theme::{self, Tokens};
@@ -108,6 +111,13 @@ pub struct ImposeDraft {
     /// scaled to fill it.
     pub cell: (f64, f64),
     pub fit_cell: bool,
+    /// Step & repeat stickers: a cut line round each page's artwork.
+    pub cut: bool,
+    /// How far the cut line lies from the artwork's edge, in points: positive outside, negative
+    /// inside.
+    pub cut_offset: f64,
+    /// Cut round the empty areas inside the artwork too.
+    pub cut_holes: bool,
     // Booklet.
     pub binding: usize,
     pub signature: usize,
@@ -152,6 +162,9 @@ impl Default for ImposeDraft {
             scale_pct: 100.0,
             cell: (0.0, 0.0),
             fit_cell: false,
+            cut: false,
+            cut_offset: 0.0,
+            cut_holes: false,
             binding: 0,
             signature: 16,
             full_last: false,
@@ -286,6 +299,15 @@ impl ImposeDraft {
             s.rotate = false;
         }
         s
+    }
+
+    /// The cut lines step & repeat adds, if they are asked for.
+    pub fn cut_spec(&self, kind: ImposeKind) -> Option<CutSpec> {
+        (kind == ImposeKind::StepRepeat && self.cut).then(|| CutSpec {
+            offset: self.cut_offset,
+            holes: if self.cut_holes { Holes::Keep } else { Holes::Fill },
+            ..CutSpec::new()
+        })
     }
 
     /// The layout for one orientation: columns and rows as many as fit, then capped by the
@@ -614,7 +636,33 @@ fn screen_sheet(ui: &mut egui::Ui, d: &mut ImposeDraft, kind: ImposeKind, unit: 
         if !auto {
             ui.label(egui::RichText::new(tl!("Turning rows needs Any columns and rows.")).weak().small());
         }
+        cut_section(ui, d);
     }
+}
+
+/// Sticker cut lines: where the line lies against the artwork, in the three ways a cutter job
+/// is set up (on the picture's edge, a little outside it, or inside it).
+fn cut_section(ui: &mut egui::Ui, d: &mut ImposeDraft) {
+    heading(ui, tl!("Cutting line"));
+    ui.add(widgets::checkbox(&mut d.cut, tl!("Add a cut line round each page's artwork (stickers)")));
+    if !d.cut {
+        return;
+    }
+    ui.horizontal(|ui| {
+        for (label, mm) in [(tl!("On the edge"), 0.0), (tl!("1 mm outside"), 1.0), (tl!("1 mm inside"), -1.0)] {
+            if ui.selectable_label((d.cut_offset / MM - mm).abs() < 1e-9, label).clicked() {
+                d.cut_offset = mm * MM;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Distance from the artwork (mm; minus is inside)"));
+        let mut mm = d.cut_offset / MM;
+        ui.add(egui::DragValue::new(&mut mm).range(-100.0..=100.0).speed(0.1).max_decimals(2));
+        d.cut_offset = mm * MM;
+    });
+    ui.add(widgets::checkbox(&mut d.cut_holes, tl!("Also cut round empty areas inside the artwork")));
+    ui.label(egui::RichText::new(tl!("Measured on the sheet, after the page scale. The line is a spot colour on its own layer.")).weak().small());
 }
 
 fn screen_booklet(ui: &mut egui::Ui, d: &mut ImposeDraft) {
@@ -822,7 +870,10 @@ pub(crate) fn finish(app: &mut PdfCraftApp, kind: ImposeKind) {
             None => app.session.booklet_pdf(id, &app.impose_draft.booklet_spec(), content).map_err(|e| e.to_string()),
         },
         _ => match app.impose_draft.layout(kind, &sizes) {
-            Ok((spec, _)) => app.session.impose_pdf(id, &spec, content).map_err(|e| e.to_string()),
+            Ok((spec, _)) => match app.impose_draft.cut_spec(kind) {
+                Some(cut) => app.session.impose_cut_pdf(id, &spec, &cut, content).map(|(bytes, _)| bytes).map_err(|e| e.to_string()),
+                None => app.session.impose_pdf(id, &spec, content).map_err(|e| e.to_string()),
+            },
             Err(e) => Err(e),
         },
     };
@@ -871,6 +922,20 @@ mod tests {
         assert!(half.per_sheet >= full.per_sheet * 4, "{} against {}", half.per_sheet, full.per_sheet);
         d.scale_pct = 0.0;
         assert!(d.summary(ImposeKind::StepRepeat, &[A5]).is_err(), "no page is scaled to nothing");
+    }
+
+    #[test]
+    fn the_cut_line_is_only_for_step_and_repeat_and_only_when_asked() {
+        let mut d = ImposeDraft::default();
+        assert_eq!(d.cut_spec(ImposeKind::StepRepeat), None, "off by default");
+        d.cut = true;
+        d.cut_offset = 1.0 * MM;
+        let spec = d.cut_spec(ImposeKind::StepRepeat).expect("on");
+        assert_eq!((spec.offset, spec.holes), (1.0 * MM, Holes::Fill));
+        d.cut_holes = true;
+        assert_eq!(d.cut_spec(ImposeKind::StepRepeat).map(|c| c.holes), Some(Holes::Keep));
+        assert_eq!(d.cut_spec(ImposeKind::NUp), None, "n-up and booklets cut nothing");
+        assert_eq!(d.cut_spec(ImposeKind::Booklet), None);
     }
 
     #[test]

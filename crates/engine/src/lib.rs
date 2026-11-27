@@ -24,6 +24,9 @@ pub mod commands;
 mod comments;
 pub mod compare;
 mod copy_image;
+pub mod cutting;
+#[cfg(test)]
+mod cutting_tests;
 pub mod dates;
 mod document;
 mod edit;

@@ -11,6 +11,21 @@ impl Session {
         crate::impose::impose_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// [`Session::impose_pdf`] with cut lines (sticker die-cut and kiss-cut contours): each copy
+    /// of a page gets a line traced round its artwork at `cut.offset` from its edge, drawn last
+    /// in one spot colour on its own layer. Returns the PDF and what was cut.
+    pub fn impose_cut_pdf(
+        &self,
+        id: DocId,
+        spec: &crate::impose::StepRepeat,
+        cut: &crate::impose::CutSpec,
+        content: print::Content,
+    ) -> Result<(Vec<u8>, crate::cutting::CutStats), EditError> {
+        let cos = self.imposition_source(id)?;
+        let config = self.get(id).ok_or(EditError::NoDocument)?.config.clone();
+        crate::guard(|| crate::cutting::impose_with_cuts(&cos, &config, spec, cut, content)).map_err(EditError::Print)?.map_err(EditError::Print)
+    }
+
     /// The print-ready PDF of document `id` made into a booklet by `spec` (saddle-stitched,
     /// perfect-bound or continuous; see `pdfcraft-impose`). The same permissions and layer rules
     /// apply as for [`Session::impose_pdf`].

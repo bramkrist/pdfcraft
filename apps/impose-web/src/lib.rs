@@ -405,6 +405,157 @@ pub fn impose(pdf: Vec<u8>, job: &Job) -> Result<Vec<u8>, String> {
     pdfcraft_print::impose_sheets(&doc, &s, content(job)?).map_err(|e| e.to_string())
 }
 
+/// Sticker cut lines asked for with a job. Every length is in millimetres.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct CutMm {
+    /// How far the line lies from the artwork's edge, on the sheet: positive outside, negative
+    /// inside, 0 on the edge.
+    pub offset_mm: f64,
+    /// `fill` (default: only the outer outline is cut) or `keep` (empty areas inside are cut too).
+    pub holes: Option<String>,
+    /// What counts as empty paper: `auto` (default), `transparent` or `white`.
+    pub background: Option<String>,
+    /// The spot colour's name (default `CutContour`).
+    pub spot: Option<String>,
+    pub width_pt: Option<f64>,
+    /// Pieces of artwork smaller than this are not cut (default 1 mm²).
+    pub min_area_mm2: Option<f64>,
+}
+
+/// The farthest a cut line may be from the artwork, in millimetres.
+const MAX_CUT_OFFSET_MM: f64 = 100.0;
+
+fn cut_spec(cut: &CutMm) -> Result<pdfcraft_impose::CutSpec, String> {
+    use pdfcraft_impose::cutline::{Background, Holes};
+    if !cut.offset_mm.is_finite() || cut.offset_mm.abs() > MAX_CUT_OFFSET_MM {
+        return Err(bad(format!("cut offset_mm must be between -{MAX_CUT_OFFSET_MM} and {MAX_CUT_OFFSET_MM}")));
+    }
+    let mut spec = pdfcraft_impose::CutSpec::new();
+    spec.offset = pt(cut.offset_mm);
+    spec.holes = match cut.holes.as_deref().unwrap_or("fill") {
+        "fill" => Holes::Fill,
+        "keep" => Holes::Keep,
+        h => return Err(bad(format!("unknown cut holes {h:?}"))),
+    };
+    spec.background = match cut.background.as_deref().unwrap_or("auto") {
+        "auto" => Background::Auto,
+        "transparent" => Background::Transparent,
+        "white" => Background::White,
+        b => return Err(bad(format!("unknown cut background {b:?}"))),
+    };
+    if let Some(name) = &cut.spot {
+        spec.paint.name.clone_from(name);
+    }
+    if let Some(width) = cut.width_pt {
+        if !(width.is_finite() && width > 0.0 && width <= 100.0) {
+            return Err(bad("cut width_pt must be greater than 0 and at most 100"));
+        }
+        spec.paint.width = width;
+    }
+    if let Some(area) = cut.min_area_mm2 {
+        if !(area.is_finite() && (0.0..=1e6).contains(&area)) {
+            return Err(bad("cut min_area_mm2 must be between 0 and 1000000"));
+        }
+        spec.min_area = pt(pt(area));
+    }
+    Ok(spec)
+}
+
+/// The modes that can carry cut lines: the ones that place whole pages on a grid.
+fn check_cut_mode(job: &Job) -> Result<(), String> {
+    match job.mode.as_str() {
+        "repeat" | "" | "sequential" | "cut-stack" => Ok(()),
+        m => Err(bad(format!("cut lines are for step & repeat, n-up and cut & stack, not {m:?}"))),
+    }
+}
+
+/// One drawing of a page that cut lines need from the browser: page `page` of the file, whose
+/// display size is `size_pt`, drawn `px_per_pt` pixels to the point (more or fewer is fine as long
+/// as the whole page is drawn on a clear background, rotated as it displays).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CutNeed {
+    /// 0-based source page.
+    pub page: usize,
+    /// How much the placement scales the page.
+    pub scale: f64,
+    /// The visible part of the page, `[x0, y0, x1, y1]` points in its display space.
+    pub clip: [f64; 4],
+    pub size_pt: [f64; 2],
+    pub px_per_pt: f64,
+}
+
+/// The drawings `job`'s layout of `pdf` needs for `cut`, one for each distinct placement.
+pub fn cut_needs(pdf: Vec<u8>, job: &Job, cut: &CutMm) -> Result<Vec<CutNeed>, String> {
+    check_cut_mode(job)?;
+    cut_spec(cut)?;
+    let doc = open(pdf)?;
+    let sizes = pdfcraft_print::page_sizes(&doc);
+    let sheets = sheets(&sizes, job)?;
+    pdfcraft_impose::cut_requests(&sheets)
+        .into_iter()
+        .map(|r| {
+            let size = *sizes.get(r.page).ok_or_else(|| bad(format!("the layout uses page {}", r.page.saturating_add(1))))?;
+            Ok(CutNeed {
+                page: r.page,
+                scale: r.scale,
+                clip: r.clip,
+                size_pt: [size.0, size.1],
+                px_per_pt: pdfcraft_impose::trace_resolution(size, &r),
+            })
+        })
+        .collect()
+}
+
+/// The cut lines of one placement: closed polygons in the page's display space (points).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CutOutline {
+    pub page: usize,
+    pub scale: f64,
+    pub clip: [f64; 4],
+    pub loops: Vec<Vec<[f64; 2]>>,
+}
+
+/// The cut lines for `need`, traced from the browser's drawing of the page: `rgba` is
+/// `width` × `height` straight (not premultiplied) pixels, row by row from the top, as a canvas
+/// gives them.
+pub fn trace_cut(rgba: &[u8], width: usize, height: usize, need: &CutNeed, cut: &CutMm) -> Result<CutOutline, String> {
+    let spec = cut_spec(cut)?;
+    let request = pdfcraft_impose::CutRequest { page: need.page, scale: need.scale, clip: need.clip };
+    let raster = pdfcraft_impose::Raster { width, height, rgba, straight: true, size: (need.size_pt[0], need.size_pt[1]) };
+    let found = pdfcraft_impose::trace_page(&raster, &request, &spec).map_err(|e| format!("page {}: {e}", need.page.saturating_add(1)))?;
+    let loops = found.loops.iter().map(|l| l.iter().map(|&(x, y)| [x, y]).collect()).collect();
+    Ok(CutOutline { page: need.page, scale: need.scale, clip: need.clip, loops })
+}
+
+/// The imposed PDF with cut lines on their own layer, from the `outlines` traced for every
+/// placement [`cut_needs`] listed. Returns the PDF and how many cut lines it has.
+pub fn impose_cut(pdf: Vec<u8>, job: &Job, cut: &CutMm, outlines: &[CutOutline]) -> Result<(Vec<u8>, usize), String> {
+    check_cut_mode(job)?;
+    let spec = cut_spec(cut)?;
+    let doc = open(pdf)?;
+    let mut sheets = sheets(&pdfcraft_print::page_sizes(&doc), job)?;
+    let found: Vec<pdfcraft_impose::Outline> = outlines
+        .iter()
+        .map(|o| pdfcraft_impose::Outline {
+            request: pdfcraft_impose::CutRequest { page: o.page, scale: o.scale, clip: o.clip },
+            loops: o.loops.iter().map(|l| l.iter().map(|p| (p[0], p[1])).collect()).collect(),
+        })
+        .collect();
+    // A placement nobody traced would silently get no cut line: refuse instead.
+    for need in pdfcraft_impose::cut_requests(&sheets) {
+        if !found.iter().any(|o| o.request == need) {
+            return Err(bad(format!("no cut line was traced for page {} as the layout places it", need.page.saturating_add(1))));
+        }
+    }
+    pdfcraft_impose::place_cuts(&mut sheets, &found, &spec.paint);
+    let paths = sheets.iter().map(|s| s.cuts.len()).sum();
+    let pdf = pdfcraft_print::impose_sheets(&doc, &sheets, content(job)?).map_err(|e| e.to_string())?;
+    Ok((pdf, paths))
+}
+
 /// Press-room preflight of `pdf`: what was found, each check, and the worst outcome.
 #[derive(Serialize)]
 pub struct Preflight {
@@ -608,6 +759,33 @@ mod wasm {
     #[wasm_bindgen]
     pub fn impose(pdf: Vec<u8>, job_json: &str) -> Result<Vec<u8>, JsError> {
         super::impose(pdf, &super::parse_job(job_json).map_err(js)?).map_err(js)
+    }
+
+    fn parse<T: serde::de::DeserializeOwned>(what: &str, json: &str) -> Result<T, JsError> {
+        serde_json::from_str(json).map_err(|e| JsError::new(&format!("{what}: {e}")))
+    }
+
+    /// `cutNeeds(pdfBytes, jobJson, cutJson)`: the page drawings cut lines need, as JSON
+    /// `[{page, scale, clip, size_pt, px_per_pt}, …]`. Draw each on a clear background at
+    /// `px_per_pt` pixels to the point, then give the pixels to `traceCut`.
+    #[wasm_bindgen(js_name = cutNeeds)]
+    pub fn cut_needs(pdf: Vec<u8>, job_json: &str, cut_json: &str) -> Result<String, JsError> {
+        to_json(&super::cut_needs(pdf, &super::parse_job(job_json).map_err(js)?, &parse("cut", cut_json)?).map_err(js)?)
+    }
+
+    /// `traceCut(rgba, width, height, needJson, cutJson)`: the cut lines of one drawing (straight
+    /// RGBA from a canvas), as JSON to collect for `imposeCut`.
+    #[wasm_bindgen(js_name = traceCut)]
+    pub fn trace_cut(rgba: &[u8], width: u32, height: u32, need_json: &str, cut_json: &str) -> Result<String, JsError> {
+        let need: super::CutNeed = parse("need", need_json)?;
+        to_json(&super::trace_cut(rgba, width as usize, height as usize, &need, &parse("cut", cut_json)?).map_err(js)?)
+    }
+
+    /// `imposeCut(pdfBytes, jobJson, cutJson, outlinesJson)`: the imposed PDF with the cut lines.
+    #[wasm_bindgen(js_name = imposeCut)]
+    pub fn impose_cut(pdf: Vec<u8>, job_json: &str, cut_json: &str, outlines_json: &str) -> Result<Vec<u8>, JsError> {
+        let outlines: Vec<super::CutOutline> = parse("outlines", outlines_json)?;
+        super::impose_cut(pdf, &super::parse_job(job_json).map_err(js)?, &parse("cut", cut_json)?, &outlines).map(|(pdf, _)| pdf).map_err(js)
     }
 
     /// `preflight(pdfBytes)`: `{ overall, checks: [{id, title, status, message}], report }` as JSON.

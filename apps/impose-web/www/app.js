@@ -187,12 +187,26 @@ function gridFields(withCopies) {
     ${state.mode === 'repeat' ? chk('rotate', 'Optimalkan: putar sebagian baris 90° kalau muat lebih banyak (hati-hati saat potong, terutama 2 sisi)', false) : ''}`;
 }
 
+// Sticker cut lines (step & repeat only): a closed line traced round each page's artwork.
+function cutFields() {
+  return `
+    <h2 class="sub2">Garis potong (stiker)</h2>
+    <div class="field">
+      ${chk('cut', 'Tambah garis potong di sekeliling gambar (spot CutContour, layer "Cut")', false)}
+      ${num('cutoff', 'Jarak dari tepi gambar (mm)', 0, 'step="0.1" min="-100" max="100"')}
+      ${sel('cutholes', 'Area kosong di dalam gambar', [['fill', 'Abaikan (potong sisi luar saja)'], ['keep', 'Ikut dipotong']], 'fill')}
+      ${sel('cutbg', 'Latar kosong', [['auto', 'Otomatis (transparan, atau putih untuk JPG)'], ['transparent', 'Hanya transparan'], ['white', 'Putih dianggap kosong']], 'auto')}
+      <p class="hint full">0 = tepat di tepi gambar · plus = di luar gambar (mis. 1) · minus = masuk ke dalam gambar. Jarak diukur di lembar, setelah skala halaman. Garis dilacak dari tampilan halaman, jadi tepi hasil bisa beda sekitar 0,1 mm.</p>
+    </div>`;
+}
+
 function renderOptions() {
   let body = '';
   if (state.mode === 'repeat' || state.mode === 'sequential' || state.mode === 'cut-stack') {
     body = `<h2>Susunan</h2><div class="field">${sheetFields()}${gridFields(state.mode === 'cut-stack')}</div>
       ${state.mode === 'cut-stack' ? '<p class="hint">Tiap posisi jadi satu tumpukan yang urut dari lembar ke lembar. Kolom otomatis dibulatkan ke kelipatan "Ulang blok".</p>' : ''}
-      ${markFields()}`;
+      ${markFields()}
+      ${state.mode === 'repeat' ? cutFields() : ''}`;
   } else if (state.mode === 'booklet') {
     body = `<h2>Booklet</h2><div class="field">
       ${sel('binding', 'Jilid', [['saddle', 'Steples tengah'], ['perfect', 'Lem panas (signature)'], ['continuous', 'Berurutan']], 'saddle', 'full')}
@@ -427,6 +441,15 @@ function marksJob() {
     width_pt: numOr('mwidth', 0.5),
     registration: val('mcolour') === 'registration',
   };
+}
+
+// The cut lines asked for (step & repeat only), or null.
+function cutJob() {
+  if (state.mode !== 'repeat' || !val('cut')) return null;
+  const c = { offset_mm: numOr('cutoff', 0) };
+  if (val('cutholes') === 'keep') c.holes = 'keep';
+  if (val('cutbg') && val('cutbg') !== 'auto') c.background = val('cutbg');
+  return c;
 }
 
 function jobLabel(j) {
@@ -1986,6 +2009,36 @@ async function applyPages(nextView = 'doc', auto = false) {
 }
 
 // ---- actions ------------------------------------------------------------------------------
+// The imposed PDF with cut lines. The engine says which placements it needs drawn; the browser
+// draws each page with pdf.js on a clear background, at the resolution asked for, and the engine
+// traces the lines from those pixels.
+async function imposeWithCuts(d, j, cut) {
+  const e = state.engine;
+  const jobJson = JSON.stringify(j), cutJson = JSON.stringify(cut);
+  const needs = JSON.parse(e.cutNeeds(d.bytes.slice(), jobJson, cutJson));
+  const doc = await pdfDoc(d.bytes);
+  const outlines = [];
+  for (let i = 0; i < needs.length; i++) {
+    say(`Melacak garis potong ${i + 1} dari ${needs.length}…`);
+    await new Promise((r) => setTimeout(r, 0));
+    const n = needs[i];
+    const pg = await doc.getPage(n.page + 1);
+    const vp = pg.getViewport({ scale: n.px_per_pt });
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.ceil(vp.width));
+    c.height = Math.max(1, Math.ceil(vp.height));
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    await pg.render({ canvasContext: ctx, viewport: vp, background: 'rgba(0,0,0,0)' }).promise;
+    const px = ctx.getImageData(0, 0, c.width, c.height).data;
+    outlines.push(JSON.parse(e.traceCut(new Uint8Array(px.buffer, px.byteOffset, px.byteLength), c.width, c.height, JSON.stringify(n), cutJson)));
+  }
+  say('Menulis lembar dengan garis potong…');
+  await new Promise((r) => setTimeout(r, 0));
+  const out = e.imposeCut(d.bytes.slice(), jobJson, cutJson, JSON.stringify(outlines));
+  const cuts = outlines.reduce((a, o) => a + o.loops.length, 0);
+  return { out, traces: needs.length, cuts };
+}
+
 async function apply() {
   const d = activeDoc();
   if (!d || !state.layout) return null;
@@ -1998,9 +2051,17 @@ async function apply() {
   try {
     const j = job();
     const t0 = performance.now();
-    let out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
-    let label = jobLabel(j);
-    const tags = [...d.tags, MODE_TAG[j.mode]];
+    const cut = cutJob();
+    let out, cutNote = '';
+    if (cut) {
+      const r = await imposeWithCuts(d, j, cut);
+      out = r.out;
+      cutNote = ` Garis potong: ${r.traces} bentuk dilacak${r.cuts ? '' : ' (tidak ada yang bisa dipotong, cek jarak/latar)'}.`;
+    } else {
+      out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
+    }
+    let label = jobLabel(j) + (cut ? ' + garis potong' : '');
+    const tags = [...d.tags, MODE_TAG[j.mode], ...(cut ? ['CUT'] : [])];
     if (j.mode === 'booklet' && bookletPer() === 2) {
       const leaf = JSON.parse(state.engine.pageSizes(out.slice()))[0];
       if (!leaf) throw new Error('Booklet kosong.');
@@ -2013,7 +2074,7 @@ async function apply() {
     if (nd) {
       state.view = 'doc';
       state.sheet = 0;
-      note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik. Bisa di-layout lagi atau disimpan.`, false, true];
+      note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik.${cutNote} Bisa di-layout lagi atau disimpan.`, false, true];
     }
   } catch (e) {
     note = [String(e.message || e), true];
@@ -2043,7 +2104,7 @@ async function exportFile(saveAs) {
   // The folder picker needs the click itself, so ask for the place before the work starts.
   let handle = null;
   if (picker) {
-    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
+    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(cutJob() ? ['CUT'] : []), ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
     try {
       handle = await window.showSaveFilePicker({ suggestedName: fileName(guess), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
     } catch (e) {
