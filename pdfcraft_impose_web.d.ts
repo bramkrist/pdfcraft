@@ -25,9 +25,27 @@ export function assemblePages(pdf: Uint8Array, extras: Uint8Array, extra_lengths
 export function cropPages(pdf: Uint8Array, boxes_json: string): Uint8Array;
 
 /**
+ * `cutNeeds(pdfBytes, jobJson, cutJson)`: the page drawings cut lines need, as JSON
+ * `[{page, scale, clip, size_pt, px_per_pt}, …]`. Draw each on a clear background at
+ * `px_per_pt` pixels to the point, then give the pixels to `traceCut`.
+ */
+export function cutNeeds(pdf: Uint8Array, job_json: string, cut_json: string): string;
+
+/**
+ * `cutterFiles(pdfBytes, jobJson, cutJson, outlinesJson)`: the plotter-cutter's PLT files of
+ * the same job, as JSON `[{name, text}, …]` (empty without `cutter` in `cutJson`).
+ */
+export function cutterFiles(pdf: Uint8Array, job_json: string, cut_json: string, outlines_json: string): string;
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  */
 export function impose(pdf: Uint8Array, job_json: string): Uint8Array;
+
+/**
+ * `imposeCut(pdfBytes, jobJson, cutJson, outlinesJson)`: the imposed PDF with the cut lines.
+ */
+export function imposeCut(pdf: Uint8Array, job_json: string, cut_json: string, outlines_json: string): Uint8Array;
 
 /**
  * `layout(pagesJson, jobJson)`: pages as `[[w, h], ...]` in mm; returns the layout as JSON.
@@ -60,6 +78,12 @@ export function pageSizes(pdf: Uint8Array): string;
 export function preflight(pdf: Uint8Array): string;
 
 /**
+ * `traceCut(rgba, width, height, needJson, cutJson)`: the cut lines of one drawing (straight
+ * RGBA from a canvas), as JSON to collect for `imposeCut`.
+ */
+export function traceCut(rgba: Uint8Array, width: number, height: number, need_json: string, cut_json: string): string;
+
+/**
  * The engine version, to show in the UI and record with a job.
  */
 export function version(): string;
@@ -73,13 +97,17 @@ export interface InitOutput {
     readonly converted_bytes: (a: number) => [number, number];
     readonly converted_report: (a: number) => [number, number];
     readonly cropPages: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly cutNeeds: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly cutterFiles: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly impose: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly imposeCut: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly layout: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly layoutPdf: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly manageInks: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly outlineText: (a: number, b: number) => [number, number, number];
     readonly pageSizes: (a: number, b: number) => [number, number, number, number];
     readonly preflight: (a: number, b: number) => [number, number, number, number];
+    readonly traceCut: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly version: () => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;

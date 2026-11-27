@@ -96,6 +96,76 @@ export function cropPages(pdf, boxes_json) {
 }
 
 /**
+ * `cutNeeds(pdfBytes, jobJson, cutJson)`: the page drawings cut lines need, as JSON
+ * `[{page, scale, clip, size_pt, px_per_pt}, …]`. Draw each on a clear background at
+ * `px_per_pt` pixels to the point, then give the pixels to `traceCut`.
+ * @param {Uint8Array} pdf
+ * @param {string} job_json
+ * @param {string} cut_json
+ * @returns {string}
+ */
+export function cutNeeds(pdf, job_json, cut_json) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(cut_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.cutNeeds(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * `cutterFiles(pdfBytes, jobJson, cutJson, outlinesJson)`: the plotter-cutter's PLT files of
+ * the same job, as JSON `[{name, text}, …]` (empty without `cutter` in `cutJson`).
+ * @param {Uint8Array} pdf
+ * @param {string} job_json
+ * @param {string} cut_json
+ * @param {string} outlines_json
+ * @returns {string}
+ */
+export function cutterFiles(pdf, job_json, cut_json, outlines_json) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(cut_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(outlines_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.cutterFiles(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr5 = ret[0];
+        var len5 = ret[1];
+        if (ret[3]) {
+            ptr5 = 0; len5 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
  * `impose(pdfBytes, jobJson)`: the imposed PDF bytes.
  * @param {Uint8Array} pdf
  * @param {string} job_json
@@ -113,6 +183,32 @@ export function impose(pdf, job_json) {
     var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v3;
+}
+
+/**
+ * `imposeCut(pdfBytes, jobJson, cutJson, outlinesJson)`: the imposed PDF with the cut lines.
+ * @param {Uint8Array} pdf
+ * @param {string} job_json
+ * @param {string} cut_json
+ * @param {string} outlines_json
+ * @returns {Uint8Array}
+ */
+export function imposeCut(pdf, job_json, cut_json, outlines_json) {
+    const ptr0 = passArray8ToWasm0(pdf, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(cut_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(outlines_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.imposeCut(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
 }
 
 /**
@@ -255,6 +351,41 @@ export function preflight(pdf) {
         return getStringFromWasm0(ptr2, len2);
     } finally {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * `traceCut(rgba, width, height, needJson, cutJson)`: the cut lines of one drawing (straight
+ * RGBA from a canvas), as JSON to collect for `imposeCut`.
+ * @param {Uint8Array} rgba
+ * @param {number} width
+ * @param {number} height
+ * @param {string} need_json
+ * @param {string} cut_json
+ * @returns {string}
+ */
+export function traceCut(rgba, width, height, need_json, cut_json) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(need_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(cut_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.traceCut(ptr0, len0, width, height, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
 

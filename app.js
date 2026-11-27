@@ -187,12 +187,30 @@ function gridFields(withCopies) {
     ${state.mode === 'repeat' ? chk('rotate', 'Optimalkan: putar sebagian baris 90° kalau muat lebih banyak (hati-hati saat potong, terutama 2 sisi)', false) : ''}`;
 }
 
+// Sticker cut lines (step & repeat only): a closed line traced round each page's artwork.
+function cutFields() {
+  return `
+    <h2 class="sub2">Garis potong (stiker)</h2>
+    <div class="field">
+      ${chk('cut', 'Tambah garis potong di sekeliling gambar (spot CutContour, layer "Cut")', false)}
+      ${num('cutoff', 'Jarak dari tepi gambar (mm)', 0, 'step="0.1" min="-100" max="100"')}
+      ${sel('cutholes', 'Area kosong di dalam gambar', [['fill', 'Abaikan (potong sisi luar saja)'], ['keep', 'Ikut dipotong']], 'fill')}
+      ${sel('cutbg', 'Latar kosong', [['auto', 'Otomatis (transparan, atau putih untuk JPG)'], ['transparent', 'Hanya transparan'], ['white', 'Putih dianggap kosong']], 'auto')}
+      <p class="hint full">0 = tepat di tepi gambar · plus = di luar gambar (mis. 1) · minus = masuk ke dalam gambar. Jarak diukur di lembar, setelah skala halaman. Garis dilacak dari tampilan halaman, jadi tepi hasil bisa beda sekitar 0,1 mm.</p>
+      ${chk('cutter', 'Untuk mesin plotter-cutter: tanda registrasi + QR di lembar, dan file PLT dari garis potong', false)}
+      <div><label class="l" for="o-cutname">Nama job (QR dan nama file .plt)</label><input type="text" id="o-cutname" data-k="cutname" maxlength="32" placeholder="otomatis dari nama file"></div>
+      ${num('cutinset', 'Jarak tanda dari tepi kertas (mm)', 10, 'step="0.5" min="1" max="100"')}
+      <p class="hint full">Tanda registrasi (kotak hitam 5 mm) di 4 sudut, tiap tanda berjarak segitu dari tepi kertas; QR di tengah bawah. Semua garis potong harus ada di dalam tanda, jadi margin harus ≥ jarak tanda + jarak garis potong (mis. margin 15 untuk tanda 10 mm dan garis +1 mm). Satu lembar = satu file PLT. Coba satu lembar dulu di mesin sebelum cetak banyak.</p>
+    </div>`;
+}
+
 function renderOptions() {
   let body = '';
   if (state.mode === 'repeat' || state.mode === 'sequential' || state.mode === 'cut-stack') {
     body = `<h2>Susunan</h2><div class="field">${sheetFields()}${gridFields(state.mode === 'cut-stack')}</div>
       ${state.mode === 'cut-stack' ? '<p class="hint">Tiap posisi jadi satu tumpukan yang urut dari lembar ke lembar. Kolom otomatis dibulatkan ke kelipatan "Ulang blok".</p>' : ''}
-      ${markFields()}`;
+      ${markFields()}
+      ${state.mode === 'repeat' ? cutFields() : ''}`;
   } else if (state.mode === 'booklet') {
     body = `<h2>Booklet</h2><div class="field">
       ${sel('binding', 'Jilid', [['saddle', 'Steples tengah'], ['perfect', 'Lem panas (signature)'], ['continuous', 'Berurutan']], 'saddle', 'full')}
@@ -427,6 +445,24 @@ function marksJob() {
     width_pt: numOr('mwidth', 0.5),
     registration: val('mcolour') === 'registration',
   };
+}
+
+// The cut lines asked for (step & repeat only), or null.
+function cutJob() {
+  if (state.mode !== 'repeat' || !val('cut')) return null;
+  const c = { offset_mm: numOr('cutoff', 0) };
+  if (val('cutholes') === 'keep') c.holes = 'keep';
+  if (val('cutbg') && val('cutbg') !== 'auto') c.background = val('cutbg');
+  if (val('cutter')) c.cutter = { name: cutterName(), inset_mm: numOr('cutinset', 10) };
+  return c;
+}
+
+// The job's name for the plotter-cutter: what was typed, else the document's, kept to the
+// letters, digits, "-" and "_" the machine's files and the QR code can carry.
+function cutterName() {
+  const clean = (t) => String(t || '').replace(/\.pdf$/i, '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+  const d = activeDoc();
+  return clean(val('cutname')) || clean(d && d.name.split(' › ')[0]) || 'stiker';
 }
 
 function jobLabel(j) {
@@ -1986,6 +2022,38 @@ async function applyPages(nextView = 'doc', auto = false) {
 }
 
 // ---- actions ------------------------------------------------------------------------------
+// The imposed PDF with cut lines. The engine says which placements it needs drawn; the browser
+// draws each page with pdf.js on a clear background, at the resolution asked for, and the engine
+// traces the lines from those pixels.
+async function imposeWithCuts(d, j, cut) {
+  const e = state.engine;
+  const jobJson = JSON.stringify(j), cutJson = JSON.stringify(cut);
+  const needs = JSON.parse(e.cutNeeds(d.bytes.slice(), jobJson, cutJson));
+  const doc = await pdfDoc(d.bytes);
+  const outlines = [];
+  for (let i = 0; i < needs.length; i++) {
+    say(`Melacak garis potong ${i + 1} dari ${needs.length}…`);
+    await new Promise((r) => setTimeout(r, 0));
+    const n = needs[i];
+    const pg = await doc.getPage(n.page + 1);
+    const vp = pg.getViewport({ scale: n.px_per_pt });
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.ceil(vp.width));
+    c.height = Math.max(1, Math.ceil(vp.height));
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    await pg.render({ canvasContext: ctx, viewport: vp, background: 'rgba(0,0,0,0)' }).promise;
+    const px = ctx.getImageData(0, 0, c.width, c.height).data;
+    outlines.push(JSON.parse(e.traceCut(new Uint8Array(px.buffer, px.byteOffset, px.byteLength), c.width, c.height, JSON.stringify(n), cutJson)));
+  }
+  say('Menulis lembar dengan garis potong…');
+  await new Promise((r) => setTimeout(r, 0));
+  const out = e.imposeCut(d.bytes.slice(), jobJson, cutJson, JSON.stringify(outlines));
+  // The PLT files are made of the same lines (the engine refuses when they run past the marks).
+  const files = cut.cutter ? JSON.parse(e.cutterFiles(d.bytes.slice(), jobJson, cutJson, JSON.stringify(outlines))) : [];
+  const cuts = outlines.reduce((a, o) => a + o.loops.length, 0);
+  return { out, traces: needs.length, cuts, files };
+}
+
 async function apply() {
   const d = activeDoc();
   if (!d || !state.layout) return null;
@@ -1998,9 +2066,19 @@ async function apply() {
   try {
     const j = job();
     const t0 = performance.now();
-    let out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
-    let label = jobLabel(j);
-    const tags = [...d.tags, MODE_TAG[j.mode]];
+    const cut = cutJob();
+    let out, cutNote = '', plt = [];
+    if (cut) {
+      const r = await imposeWithCuts(d, j, cut);
+      out = r.out;
+      plt = r.files;
+      cutNote = ` Garis potong: ${r.traces} bentuk dilacak${r.cuts ? '' : ' (tidak ada yang bisa dipotong, cek jarak/latar)'}.`;
+      if (plt.length) cutNote += ` File PLT: ${plt.map((f) => f.name).join(', ')} (ikut terunduh saat PDF disimpan).`;
+    } else {
+      out = state.engine.impose(d.bytes.slice(), JSON.stringify(j));
+    }
+    let label = jobLabel(j) + (cut ? ' + garis potong' : '');
+    const tags = [...d.tags, MODE_TAG[j.mode], ...(cut ? ['CUT'] : [])];
     if (j.mode === 'booklet' && bookletPer() === 2) {
       const leaf = JSON.parse(state.engine.pageSizes(out.slice()))[0];
       if (!leaf) throw new Error('Booklet kosong.');
@@ -2011,9 +2089,10 @@ async function apply() {
     }
     nd = addDoc(`${d.name} › ${label}`, out, tags);
     if (nd) {
+      nd.plt = plt;
       state.view = 'doc';
       state.sheet = 0;
-      note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik. Bisa di-layout lagi atau disimpan.`, false, true];
+      note = [`Tab baru: ${fmt(out.length / 1048576, 2)} MB · ${fmt((performance.now() - t0) / 1000, 1)} detik.${cutNote} Bisa di-layout lagi atau disimpan.`, false, true];
     }
   } catch (e) {
     note = [String(e.message || e), true];
@@ -2043,7 +2122,7 @@ async function exportFile(saveAs) {
   // The folder picker needs the click itself, so ask for the place before the work starts.
   let handle = null;
   if (picker) {
-    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
+    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(cutJob() ? ['CUT'] : []), ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
     try {
       handle = await window.showSaveFilePicker({ suggestedName: fileName(guess), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
     } catch (e) {
@@ -2078,10 +2157,21 @@ async function save(d, handle) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     }
-    say(`Tersimpan: ${fileName(d)}`, false, true);
+    const plt = d.plt || [];
+    plt.forEach((f, i) => setTimeout(() => downloadText(f.name, f.text), 400 * (i + 1)));
+    say(`Tersimpan: ${fileName(d)}${plt.length ? ` + ${plt.map((f) => f.name).join(', ')}` : ''}`, false, true);
   } catch (e) {
     if (!(e && e.name === 'AbortError')) say(String(e.message || e), true);
   }
+}
+
+// A plain-text file (the plotter-cutter's PLT) saved through the browser's download.
+function downloadText(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
 function say(t, err = false, ok = false) {
