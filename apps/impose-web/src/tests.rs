@@ -279,3 +279,28 @@ fn long_edge_means_the_physical_long_edge_on_a_landscape_sheet() {
     assert!((b[0] - f[0]).abs() < 1e-6 && (b[2] - f[2]).abs() < 1e-6, "{f:?} {b:?}");
     assert!(((320.0 - f[3]) - b[1]).abs() < 1e-6, "{f:?} {b:?}");
 }
+
+#[test]
+fn cropping_sets_the_crop_box_of_the_named_pages_only() {
+    let src = pdf(3, 300, 400);
+    let out = crop_pages(src, &parse_boxes(r#"[{"page":0,"rect":[100,150,150,190]},{"page":2,"rect":[10,10,60,60]}]"#)).expect("crop");
+    let sizes = page_sizes(out).expect("sizes");
+    let pt = |v: f64| v / 25.4 * 72.0;
+    assert!((pt(sizes[0][0]) - 50.0).abs() < 0.01 && (pt(sizes[0][1]) - 40.0).abs() < 0.01, "{:?}", sizes[0]);
+    assert!((pt(sizes[1][0]) - 300.0).abs() < 0.01, "the page left out keeps its size");
+    assert!((pt(sizes[2][0]) - 50.0).abs() < 0.01);
+}
+
+#[test]
+fn cropping_is_all_or_nothing_and_refuses_nonsense() {
+    let boxes = |j: &str| parse_boxes(j);
+    assert!(crop_pages(pdf(1, 300, 400), &[]).is_err());
+    assert!(crop_pages(pdf(1, 300, 400), &boxes(r#"[{"page":1,"rect":[0,0,10,10]}]"#)).is_err_and(|e| e.contains("no page 2")));
+    // The second box is a point, so the whole call fails, not just that page.
+    assert!(crop_pages(pdf(2, 300, 400), &boxes(r#"[{"page":0,"rect":[0,0,10,10]},{"page":1,"rect":[5,5,5,5]}]"#)).is_err());
+    assert!(crop_pages(vec![1, 2, 3], &boxes(r#"[{"page":0,"rect":[0,0,10,10]}]"#)).is_err());
+}
+
+fn parse_boxes(json: &str) -> Vec<CropBox> {
+    serde_json::from_str(json).expect("boxes")
+}

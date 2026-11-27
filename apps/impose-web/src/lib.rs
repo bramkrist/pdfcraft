@@ -534,6 +534,38 @@ pub fn assemble(pdf: Vec<u8>, extras: Vec<Vec<u8>>, plan: &[PlanPage]) -> Result
     pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())
 }
 
+/// One page's new crop box, in PDF user space: `[left, bottom, right, top]`.
+#[derive(Deserialize)]
+pub struct CropBox {
+    pub page: usize,
+    pub rect: [f64; 4],
+}
+
+/// Most pages one crop call may name.
+const MAX_CROPS: usize = 20_000;
+
+/// Set the crop box of the named pages (0-based) and write the file in full. The browser finds
+/// the boxes (from what its own page renderer draws, where the page is rotated or not); here
+/// they are only checked and applied, all or none. A box is kept inside its page's media box.
+pub fn crop_pages(pdf: Vec<u8>, boxes: &[CropBox]) -> Result<Vec<u8>, String> {
+    use pdfcraft_organize as org;
+    if boxes.is_empty() {
+        return Err(bad("no pages to crop"));
+    }
+    if boxes.len() > MAX_CROPS {
+        return Err(bad(format!("at most {MAX_CROPS} pages")));
+    }
+    let mut doc = open(pdf)?;
+    let count = org::page_count(&doc).map_err(|e| e.to_string())?;
+    if let Some(b) = boxes.iter().find(|b| b.page >= count) {
+        return Err(bad(format!("the document has no page {}", b.page.saturating_add(1))));
+    }
+    for b in boxes {
+        org::set_page_box(&mut doc, &[b.page], org::PageBox::Crop, org::BoxSpec::Rect(b.rect)).map_err(|e| format!("page {}: {e}", b.page + 1))?;
+    }
+    pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())
+}
+
 fn parse_job(json: &str) -> Result<Job, String> {
     serde_json::from_str(json).map_err(|e| format!("job: {e}"))
 }
@@ -627,6 +659,14 @@ mod wasm {
             at = end;
         }
         super::assemble(pdf, files, &plan).map_err(js)
+    }
+
+    /// `cropPages(pdfBytes, boxesJson)`: `[{"page": 0, "rect": [l, b, r, t]}, …]` in PDF user space
+    /// becomes each page's crop box.
+    #[wasm_bindgen(js_name = cropPages)]
+    pub fn crop_pages(pdf: Vec<u8>, boxes_json: &str) -> Result<Vec<u8>, JsError> {
+        let boxes: Vec<super::CropBox> = serde_json::from_str(boxes_json).map_err(|e| JsError::new(&format!("boxes: {e}")))?;
+        super::crop_pages(pdf, &boxes).map_err(js)
     }
 
     /// The engine version, to show in the UI and record with a job.

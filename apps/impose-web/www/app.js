@@ -97,6 +97,8 @@ root.innerHTML = `
         <button type="button" class="btn ghost small" data-o="rotr" title="Putar kanan (R)">⟳</button>
         <button type="button" class="btn ghost small" data-o="dup" title="Duplikat (Ctrl+D)">Duplikat</button>
         <button type="button" class="btn ghost small" data-o="bulk" title="Isi jumlah salinan tiap halaman sekaligus (mis. hal. 1 x10, hal. 2 x12)">Salin massal…</button>
+        <button type="button" class="btn ghost small" data-o="trim" title="Potong tiap halaman tepat di sekitar isinya (Remove white margins). Hasilnya tab baru; halaman kosong dibiarkan.">Hapus ruang kosong</button>
+        <label class="padlab" title="Ruang yang disisakan di sekeliling isi, dalam mm"><input type="number" id="trim-pad" min="0" max="100" step="0.5" value="0" aria-label="Sisa ruang di sekeliling isi (mm)"> mm</label>
         <button type="button" class="btn ghost small" data-o="del" title="Hapus (Del)">Hapus</button>
         <button type="button" class="btn ghost small" data-o="left" title="Geser ke kiri">◀</button>
         <button type="button" class="btn ghost small" data-o="right" title="Geser ke kanan">▶</button>
@@ -577,6 +579,90 @@ async function inksActive() {
     }
   } catch (e) {
     note = ['Ubah tinta gagal: ' + String(e.message || e), true];
+  } finally {
+    state.busy = false;
+    recompute();
+    if (note) say(...note);
+  }
+}
+
+// Does this pixel carry anything? Transparent is paper; an opaque pixel is paper when it is
+// light in every channel; a see-through one has some ink however pale.
+function isInk(d, i) {
+  const a = d[i + 3];
+  return a !== 0 && (a !== 255 || d[i] < 250 || d[i + 1] < 250 || d[i + 2] < 250);
+}
+
+// The smallest box [x0, y0, x1, y1] (right and bottom exclusive) around the ink of an RGBA
+// raster, or null when the page is blank.
+function inkBox(data, w, h) {
+  let x0 = w, y0 = h, x1 = 0, y1 = 0;
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4;
+    for (let x = 0; x < w; x++) {
+      if (isInk(data, row + x * 4)) {
+        if (x < x0) x0 = x;
+        if (x >= x1) x1 = x + 1;
+        if (y < y0) y0 = y;
+        y1 = y + 1;
+      }
+    }
+  }
+  return x1 > x0 && y1 > y0 ? [x0, y0, x1, y1] : null;
+}
+
+async function trimActive() {
+  const d = activeDoc();
+  if (!d || !state.engine || state.busy) return;
+  const padMm = Math.min(100, Math.max(0, Number($('trim-pad').value) || 0));
+  state.busy = true;
+  draw();
+  let note = null;
+  try {
+    const doc = await pdfDoc(d.bytes);
+    const boxes = [];
+    const blank = [];
+    for (let i = 0; i < doc.numPages; i++) {
+      say(`Mencari isi halaman ${i + 1} dari ${doc.numPages}…`);
+      await new Promise((r) => setTimeout(r, 0));
+      const pg = await doc.getPage(i + 1);
+      const v1 = pg.getViewport({ scale: 1 });
+      // At most 2400 px on the long side, so a huge page is searched at lower resolution.
+      const sc = Math.min(1, 2400 / Math.max(v1.width, v1.height, 1));
+      const vp = pg.getViewport({ scale: sc });
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.ceil(vp.width));
+      c.height = Math.max(1, Math.ceil(vp.height));
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+      const box = inkBox(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+      if (!box) {
+        blank.push(i + 1);
+        continue;
+      }
+      // One pixel for the soft edge of a stroke, plus the space the person asked to keep.
+      const grow = 1 + (padMm / 25.4) * 72 * sc;
+      const x0 = Math.max(0, box[0] - grow), y0 = Math.max(0, box[1] - grow);
+      const x1 = Math.min(c.width, box[2] + grow), y1 = Math.min(c.height, box[3] + grow);
+      const a = vp.convertToPdfPoint(x0, y0), b = vp.convertToPdfPoint(x1, y1);
+      const rect = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+      if (rect.every(Number.isFinite) && rect[2] - rect[0] >= 1 && rect[3] - rect[1] >= 1) boxes.push({ page: i, rect });
+      else blank.push(i + 1);
+    }
+    if (!boxes.length) {
+      note = ['Tidak ada isi yang bisa dipakai sebagai batas: semua halaman kosong.', true];
+      return;
+    }
+    const bytes = state.engine.cropPages(d.bytes.slice(), JSON.stringify(boxes));
+    const nd = addDoc(`${d.name} › Potong`, bytes, [...d.tags, 'POTONG']);
+    if (nd) {
+      state.view = 'doc';
+      state.sheet = 0;
+      const skipped = blank.length ? ` ${blank.length} halaman kosong dilewati (hal. ${blank.slice(0, 6).join(', ')}${blank.length > 6 ? '…' : ''}).` : '';
+      note = [`${boxes.length} halaman dipotong ke isinya${padMm ? `, sisa ${fmt(padMm, 1)} mm` : ''}.${skipped}`, false, true];
+    }
+  } catch (e) {
+    note = ['Gagal memotong: ' + String(e.message || e), true];
   } finally {
     state.busy = false;
     recompute();
@@ -1640,6 +1726,7 @@ function orgAction(what) {
     bulk.open = !bulk.open;
     return draw();
   }
+  if (what === 'trim') return trimActive();
   const sel = orgSelected(o);
   const after = sel.length ? sel[sel.length - 1] + 1 : o.items.length;
   if (what === 'undo') {
