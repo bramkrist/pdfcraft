@@ -816,6 +816,7 @@ let preview = null; // { key, bytes }
 function recompute() {
   say('');
   state.layout = null;
+  state.rotateHint = null;
   const d = activeDoc();
   if (state.engine && d) {
     try {
@@ -823,11 +824,28 @@ function recompute() {
     } catch (e) {
       say(String(e.message || e), true);
     }
+    state.rotateHint = rotateHint(d);
   }
   if (state.mode === 'manual' && d) state.sheet = Math.min(state.sheet, manualOf(d).sheets.length - 1);
   else if (state.layout) state.sheet = Math.min(state.sheet, state.layout.sheets.length - 1);
   else state.sheet = 0;
   draw();
+}
+
+/** Step & Repeat never turns rows by itself. When turning them would fit more, say how many (a suggestion only). */
+function rotateHint(d) {
+  state.rotateHint = null;
+  const L = state.layout;
+  if (state.mode !== 'repeat' || !L || val('rotate')) return null;
+  try {
+    const j = job();
+    if (j.cell_mm) return null; // a fixed cell is never turned
+    j.rotate = true;
+    const alt = JSON.parse(state.engine.layout(JSON.stringify(d.sizes), JSON.stringify(j)));
+    return alt.up_per_sheet > L.up_per_sheet ? { now: L.up_per_sheet, turned: alt.up_per_sheet } : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 function pageCount() {
@@ -882,7 +900,8 @@ function draw() {
     $('summary').innerHTML = `
       <div class="big">${L.sheet_count}<small>${state.mode === 'bleed' ? 'halaman' : 'sisi lembar'}</small></div>
       ${state.mode === 'bleed' ? '' : `<div class="big">${L.up_per_sheet}<small>up / lembar</small></div>`}
-      <div class="hint">${fmt(s.size_mm[0])} × ${fmt(s.size_mm[1])} mm</div>`;
+      <div class="hint">${fmt(s.size_mm[0])} × ${fmt(s.size_mm[1])} mm</div>
+      ${state.rotateHint ? `<div class="hint tryrot">Kalau baris diputar 90°: ${state.rotateHint.turned} up (sekarang ${state.rotateHint.now}). Hati-hati saat potong, terutama cetak 2 sisi. <button type="button" class="btn ghost small" id="tryrot">Coba putar</button></div>` : ''}`;
   } else {
     $('summary').innerHTML = '';
   }
@@ -2139,6 +2158,13 @@ $('prev').addEventListener('click', () => { state.sheet = Math.max(0, state.shee
 $('next').addEventListener('click', () => { state.sheet = Math.min(pageCount() - 1, state.sheet + 1); draw(); });
 $('apply').addEventListener('click', () => (state.view === 'pages' ? applyPages() : apply()));
 $('ack').addEventListener('change', draw);
+$('summary').addEventListener('click', (e) => {
+  if (!e.target.closest || !e.target.closest('#tryrot')) return;
+  const el = document.querySelector('[data-k="rotate"]');
+  if (!el) return;
+  el.checked = true;
+  recompute();
+});
 $('pf').addEventListener('click', (e) => {
   if (e.target.closest('#do-outline')) outlineActive();
   if (e.target.closest('#do-inks')) inksActive();
