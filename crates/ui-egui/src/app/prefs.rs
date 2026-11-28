@@ -97,6 +97,7 @@ impl PdfCraftApp {
             "always_default_view": self.always_default_view,
             "highlight_fields": self.view_defaults.highlight_fields,
             "units": self.units,
+            "manual_templates": self.manual_templates.to_json(),
             "language": self.language,
             "reading_colors": self.reading_colors,
             // Null follows the system's text scaling.
@@ -207,6 +208,7 @@ impl PdfCraftApp {
             self.recent_limit = usize::try_from(limit).map_or(crate::RECENT_FILES_MAX, |n| n.min(crate::RECENT_FILES_MAX));
         }
         self.recent.truncate(self.recent_limit);
+        self.manual_templates = crate::dialogs::manual_ui::templates::Templates::from_json(&v["manual_templates"]);
         self.restore_layout_prefs(&v);
         self.restore_behavior_prefs(&v);
         self.restore_view_prefs(&v);

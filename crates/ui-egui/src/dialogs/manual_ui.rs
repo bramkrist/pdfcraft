@@ -17,6 +17,10 @@ use crate::theme;
 use crate::units::Unit;
 use crate::{PdfCraftApp, widgets};
 
+pub(crate) mod templates;
+
+use templates::{Template, Templates};
+
 const MM: f64 = 72.0 / 25.4;
 /// How much two edges may overlap before it counts, in millimetres.
 const SLACK: f64 = 0.01;
@@ -110,6 +114,17 @@ pub struct ManualDraft {
     pub add_page: usize,
     drag: Option<Drag>,
     pub guides: Vec<Guide>,
+    /// The template section's choices; they outlast a document.
+    pub tpl: TemplateUi,
+}
+
+/// What the template section shows: the template chosen, the name being typed, and whether a
+/// delete has been asked once.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TemplateUi {
+    pub chosen: Option<String>,
+    pub name: String,
+    pub confirm_delete: bool,
 }
 
 impl Default for ManualDraft {
@@ -128,6 +143,7 @@ impl Default for ManualDraft {
             add_page: 0,
             drag: None,
             guides: Vec::new(),
+            tpl: TemplateUi::default(),
         }
     }
 }
@@ -799,6 +815,166 @@ fn status(ui: &mut egui::Ui, d: &ManualDraft, sizes: &[(f64, f64)]) {
     ui.label(egui::RichText::new(text).small().color(color));
 }
 
+/// What the template section asks the app to do once the frame's borrows are over.
+#[derive(Default)]
+struct TplAsk {
+    notice: Option<String>,
+    error: Option<String>,
+    /// A template to write to a file, under its name (no files on the web).
+    #[cfg(not(target_arch = "wasm32"))]
+    export: Option<(String, Template)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    import: bool,
+}
+
+/// The saved layouts: use one, save the one on the sheet, delete, share as a file.
+fn template_controls(ui: &mut egui::Ui, d: &mut ManualDraft, all: &mut Templates, pages: usize) -> TplAsk {
+    let mut ask = TplAsk::default();
+    if d.tpl.chosen.as_deref().is_some_and(|n| !all.contains(n)) {
+        d.tpl.chosen = None;
+    }
+    ui.label(egui::RichText::new(tl!("Templates")).small().strong());
+    ui.horizontal(|ui| {
+        let none = tl!("(none yet)");
+        let shown = d.tpl.chosen.clone().unwrap_or_else(|| if all.is_empty() { none.to_owned() } else { tl!("Pick one").to_owned() });
+        let before = d.tpl.chosen.clone();
+        let combo = craft_ui::ComboBox::from_id_salt("manual-template").selected_text(shown).show_ui(ui, |ui| {
+            for name in all.names() {
+                ui.selectable_value(&mut d.tpl.chosen, Some(name.to_owned()), name);
+            }
+        });
+        combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Template")));
+        if d.tpl.chosen != before {
+            d.tpl.confirm_delete = false;
+        }
+    });
+    let chosen = d.tpl.chosen.clone();
+    ui.horizontal(|ui| {
+        if ui.add_enabled(chosen.is_some(), egui::Button::new(tl!("Use"))).clicked()
+            && let Some(name) = &chosen
+            && let Some(t) = all.get(name)
+        {
+            let skipped = t.apply(d, pages);
+            let mut msg = crate::i18n::fmt(tl!("Template “{name}” applied."), &[("name", name)]);
+            if skipped > 0 {
+                msg.push(' ');
+                msg.push_str(&crate::i18n::fmt(tl!("{n} pages left out: this file does not have them."), &[("n", &skipped.to_string())]));
+            }
+            ask.notice = Some(msg);
+        }
+        let label = if d.tpl.confirm_delete { tl!("Click again to delete") } else { tl!("Delete") };
+        if ui.add_enabled(chosen.is_some(), egui::Button::new(label)).clicked()
+            && let Some(name) = &chosen
+        {
+            if d.tpl.confirm_delete {
+                all.remove(name);
+                d.tpl.chosen = None;
+                d.tpl.confirm_delete = false;
+                ask.notice = Some(crate::i18n::fmt(tl!("Template “{name}” deleted."), &[("name", name)]));
+            } else {
+                d.tpl.confirm_delete = true;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let edit =
+            ui.add(egui::TextEdit::singleline(&mut d.tpl.name).hint_text(tl!("Name")).char_limit(templates::MAX_NAME_CHARS).desired_width(110.0));
+        edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Template name")));
+        let name = templates::clean_name(&d.tpl.name);
+        let label = if all.contains(&name) { tl!("Replace") } else { tl!("Save") };
+        if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
+            match Template::from_draft(d).and_then(|t| all.save(&name, t)) {
+                Ok(kept) => {
+                    ask.notice = Some(crate::i18n::fmt(tl!("Template “{name}” saved."), &[("name", &kept)]));
+                    d.tpl.chosen = Some(kept);
+                    d.tpl.confirm_delete = false;
+                }
+                Err(e) => ask.error = Some(e),
+            }
+        }
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Export…")).clicked() {
+            // The chosen template, or the layout on the sheet when none is chosen.
+            let from = match &chosen {
+                Some(n) => all.get(n).cloned().map(|t| (n.clone(), t)).ok_or_else(String::new),
+                None => Template::from_draft(d).map(|t| (templates::clean_name(&d.tpl.name), t)),
+            };
+            match from {
+                Ok(pair) => ask.export = Some(pair),
+                Err(e) if e.is_empty() => {}
+                Err(e) => ask.error = Some(e),
+            }
+        }
+        if ui.button(tl!("Import…")).clicked() {
+            ask.import = true;
+        }
+    });
+    ask
+}
+
+/// Export… : ask where, then write the template as `*.impose.json`.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_template(app: &mut PdfCraftApp, name: String, t: Template) {
+    use crate::file_filter::AddFilterAnyCase as _;
+    let dialog = rfd::AsyncFileDialog::new()
+        .add_filter_any_case(tl!("Imposition layout"), &["json"])
+        .set_file_name(format!("{}.impose.json", templates::file_stem(&name)));
+    app.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| {
+        let name = Some(name.as_str()).filter(|n| !n.is_empty());
+        let text = serde_json::to_string_pretty(&t.to_json(name)).unwrap_or_default();
+        match crate::editing::write_atomically(&path.to_string_lossy(), text.as_bytes()) {
+            Ok(()) => app.notify_fmt(tl!("Template saved to {path}."), &[("path", &path.to_string_lossy())]),
+            Err(e) => app.notify_error(e),
+        }
+    });
+}
+
+/// Import… : ask for a file, then keep its layout as a template (it is not applied).
+#[cfg(not(target_arch = "wasm32"))]
+fn import_template(app: &mut PdfCraftApp) {
+    use crate::file_filter::AddFilterAnyCase as _;
+    let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!("Imposition layout"), &["json"]);
+    app.ask_one(crate::pickers::Ask::File(dialog), None, |app, path| match read_template(&path) {
+        Ok((name, t, dropped)) => match app.manual_templates.save(&name, t) {
+            Ok(kept) => {
+                app.manual_draft.tpl.chosen = Some(kept.clone());
+                app.manual_draft.tpl.confirm_delete = false;
+                let mut msg = crate::i18n::fmt(tl!("Template “{name}” imported. Press Use."), &[("name", &kept)]);
+                if dropped > 0 {
+                    msg.push(' ');
+                    msg.push_str(&crate::i18n::fmt(tl!("{n} entries in the file made no sense and were left out."), &[("n", &dropped.to_string())]));
+                }
+                app.notify(msg);
+            }
+            Err(e) => app.notify_error(e),
+        },
+        Err(e) => app.notify_error(e),
+    });
+}
+
+/// The template in a file, its name (the file's own, or the file name's) and how many cells were
+/// left out. A file larger than [`templates::MAX_FILE_BYTES`] is not read.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_template(path: &std::path::Path) -> Result<(String, Template, usize), String> {
+    use std::io::Read;
+    let fail = |e: &dyn std::fmt::Display| crate::i18n::fmt(tl!("Import failed: {error}"), &[("error", &e.to_string())]);
+    let file = std::fs::File::open(path).map_err(|e| fail(&e))?;
+    let mut bytes = Vec::new();
+    file.take(templates::MAX_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| fail(&e))?;
+    if bytes.len() as u64 > templates::MAX_FILE_BYTES {
+        return Err(fail(&tl!("the file is too large")));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| fail(&e))?;
+    let (t, dropped) = Template::from_json(&v).map_err(|e| fail(&e))?;
+    let stem = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = stem.strip_suffix(".impose.json").or_else(|| stem.strip_suffix(".json")).unwrap_or(&stem).to_owned();
+    let name = templates::clean_name(v["name"].as_str().unwrap_or(&stem));
+    let name = if name.is_empty() { tl!("Imported layout").to_owned() } else { name };
+    Ok((name, t, dropped))
+}
+
 /// Draw the editor; returns (finish, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
     let Some((_, id)) = app.active_ids() else { return (false, true) };
@@ -806,8 +982,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
     let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width) / MM, f64::from(p.height) / MM)).collect();
     let unit = app.units;
     let d = &mut app.manual_draft;
+    let all = &mut app.manual_templates;
     d.attach(id, sizes.len());
     let mut seed_error = None;
+    let mut tpl_ask = TplAsk::default();
     ui.label(egui::RichText::new(tl!("Manual")).font(theme::semibold(18.0)));
     ui.add_space(4.0);
     ui.horizontal_top(|ui| {
@@ -874,10 +1052,27 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
                 .small()
                 .weak(),
             );
+            ui.add_space(6.0);
+            tpl_ask = template_controls(ui, d, all, sizes.len());
         });
     });
     if let Some(e) = seed_error {
         app.notify_error(e);
+    }
+    if let Some(m) = tpl_ask.notice.take() {
+        app.notify(m);
+    }
+    if let Some(e) = tpl_ask.error.take() {
+        app.notify_error(e);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some((name, t)) = tpl_ask.export.take() {
+            export_template(app, name, t);
+        }
+        if tpl_ask.import {
+            import_template(app);
+        }
     }
     ui.add_space(12.0);
     let d = &app.manual_draft;
@@ -1453,5 +1648,164 @@ mod tests {
         h.run();
         h.get_by_label("Add to sheet");
         h.get_by_label("Finish");
+    }
+    // ---- templates, through the whole dialog ----
+
+    type App = egui_kittest::Harness<'static, PdfCraftApp>;
+
+    /// The Manual dialog on a one-page document, drawn until it settles.
+    fn dialog() -> App {
+        let mut app = PdfCraftApp::new();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        app.open_bytes("a.pdf", None, blank_pdf(420, 595)).expect("opens");
+        app.execute("impose.manual");
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                body(ui, app);
+            },
+            app,
+        );
+        h.run();
+        h
+    }
+
+    fn toast(h: &App) -> String {
+        h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+    }
+
+    fn click(h: &mut App, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label(label).click();
+        h.run();
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-manual-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    #[test]
+    fn a_layout_is_saved_used_and_deleted_with_a_second_click() {
+        use egui_kittest::kittest::{NodeT as _, Queryable};
+        let mut h = dialog();
+        let made = vec![vec![Cell { page: 0, x: 12.0, y: 8.0, turns: 1 }]];
+        h.state_mut().manual_draft.sheets = made.clone();
+        h.state_mut().manual_draft.bleed = 2.0;
+        h.run();
+        // Nothing to save under until it has a name.
+        assert!(h.get_by_label("Save").accesskit_node().is_disabled());
+        h.get_by_label("Template name").click();
+        h.get_by_label("Template name").type_text("Kartu");
+        h.run();
+        click(&mut h, "Save");
+        assert_eq!(h.state().manual_templates.get("Kartu").map(|t| t.sheets.clone()), Some(made.clone()));
+        assert_eq!(h.state().manual_draft.tpl.chosen.as_deref(), Some("Kartu"));
+        assert!(toast(&h).contains("Kartu") && toast(&h).contains("saved"), "{}", toast(&h));
+        // The same name now replaces.
+        h.get_by_label("Replace");
+
+        h.state_mut().manual_draft.sheets = vec![Vec::new()];
+        h.state_mut().manual_draft.bleed = 0.0;
+        h.run();
+        click(&mut h, "Use");
+        assert_eq!((h.state().manual_draft.sheets.clone(), h.state().manual_draft.bleed), (made, 2.0));
+
+        click(&mut h, "Delete");
+        assert!(h.state().manual_templates.contains("Kartu"), "one click asks only");
+        click(&mut h, "Click again to delete");
+        assert!(!h.state().manual_templates.contains("Kartu"));
+        assert_eq!(h.state().manual_draft.tpl.chosen, None);
+    }
+
+    #[test]
+    fn using_a_template_leaves_out_the_pages_the_file_lacks_and_says_so() {
+        let mut h = dialog();
+        let t = Template {
+            sheet: (480.0, 320.0),
+            bleed: 0.0,
+            marks: true,
+            sheets: vec![vec![Cell { page: 0, x: 1.0, y: 1.0, turns: 0 }, Cell { page: 5, x: 40.0, y: 1.0, turns: 0 }]],
+        };
+        h.state_mut().manual_templates.save("two", t).expect("room");
+        h.state_mut().manual_draft.tpl.chosen = Some("two".to_owned());
+        h.run();
+        click(&mut h, "Use");
+        assert_eq!(h.state().manual_draft.sheets, vec![vec![Cell { page: 0, x: 1.0, y: 1.0, turns: 0 }]]);
+        assert!(toast(&h).contains("1 pages left out"), "{}", toast(&h));
+    }
+
+    #[test]
+    fn a_template_goes_out_to_a_file_and_comes_back_in() {
+        let dir = scratch("roundtrip");
+        let file = dir.join("job.impose.json");
+        let _ = std::fs::remove_file(&file);
+        let mut h = dialog();
+        let made = vec![vec![Cell { page: 0, x: 12.0, y: 8.0, turns: 3 }]];
+        h.state_mut().manual_draft.sheets = made.clone();
+        h.run();
+        // No template chosen: Export writes the layout on the sheet, under the name typed.
+        h.state_mut().manual_draft.tpl.name = "Job".to_owned();
+        h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+        click(&mut h, "Export…");
+        h.state_mut().process_picked();
+        let text = std::fs::read_to_string(&file).expect("written");
+        let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!((v["name"].as_str(), v["sheets"][0][0]["turn"].as_i64()), (Some("Job"), Some(270)));
+
+        h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+        click(&mut h, "Import…");
+        h.state_mut().process_picked();
+        h.run();
+        let kept = h.state().manual_templates.get("Job").cloned().expect("kept under the file's name");
+        assert_eq!(kept.sheets, made);
+        assert_eq!(h.state().manual_draft.tpl.chosen.as_deref(), Some("Job"));
+        assert!(toast(&h).contains("imported"), "{}", toast(&h));
+        // Importing does not apply it.
+        assert_eq!(h.state().manual_draft.sheets, made);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_template_or_is_too_large_keeps_nothing() {
+        let dir = scratch("refused");
+        let bad = dir.join("bad.impose.json");
+        let big = dir.join("big.impose.json");
+        std::fs::write(&bad, b"{ \"sheets\": 3 }").expect("write");
+        std::fs::write(&big, vec![b' '; (templates::MAX_FILE_BYTES + 1) as usize]).expect("write");
+        let mut h = dialog();
+        for (file, why) in [(&bad, "Import failed"), (&big, "too large")] {
+            h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+            click(&mut h, "Import…");
+            h.state_mut().process_picked();
+            h.run();
+            assert!(h.state().manual_templates.is_empty(), "{why}");
+            assert!(toast(&h).contains(why), "{why}: {}", toast(&h));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_templates_outlast_the_session_in_the_settings() {
+        let mut a = PdfCraftApp::new();
+        let t =
+            Template { sheet: (500.0, 300.0), bleed: 3.0, marks: false, sheets: vec![vec![Cell { page: 2, x: 4.5, y: 6.0, turns: 2 }], Vec::new()] };
+        a.manual_templates.save("kept", t).expect("room");
+        let mut b = PdfCraftApp::new();
+        b.restore(&a.persist());
+        assert_eq!(b.manual_templates, a.manual_templates);
+        // Settings from before templates, or with nonsense in their place, start with none.
+        let mut c = PdfCraftApp::new();
+        c.restore(r#"{ "manual_templates": [1, 2] }"#);
+        assert!(c.manual_templates.is_empty());
+        c.restore("{}");
+        assert!(c.manual_templates.is_empty());
     }
 }

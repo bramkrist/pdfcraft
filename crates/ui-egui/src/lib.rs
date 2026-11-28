@@ -657,6 +657,8 @@ pub struct PdfCraftApp {
     pub impose_draft: impose_ui::ImposeDraft,
     /// Imposing ▸ Manual editor state.
     pub manual_draft: manual_ui::ManualDraft,
+    /// Imposing ▸ Manual: the named layouts kept in the settings.
+    pub manual_templates: manual_ui::templates::Templates,
     pub inks_draft: inks_ui::InksDraft,
     /// Repeat pages dialog state.
     pub repeat_draft: repeat_ui::RepeatDraft,
