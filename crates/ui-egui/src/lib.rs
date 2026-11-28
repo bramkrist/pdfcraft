@@ -109,6 +109,7 @@ use dialogs::inks_ui;
 use dialogs::manual_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
+use dialogs::pagetools_ui;
 use dialogs::palette;
 use dialogs::protect;
 use dialogs::repeat_ui;
@@ -664,6 +665,7 @@ pub struct PdfCraftApp {
     pub repeat_draft: repeat_ui::RepeatDraft,
     /// Add bleed dialog state.
     pub bleed_draft: bleed_ui::BleedDraft,
+    pub page_tools_draft: pagetools_ui::PageToolsDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.

@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::Document;
 use pdfcraft_impose::{
-    AddBleed, Align, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks, StepRepeat,
+    AddBleed, Align, Arrange, Binding, BleedMethod, Booklet, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks, PageSet,
+    PageTool, Shift, Shuffle, StepRepeat, Tile, Trim, TrimShift,
 };
 use pdfcraft_print::{Content, Sheet};
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ fn mm(pt: f64) -> f64 {
 #[serde(deny_unknown_fields, default)]
 pub struct Job {
     /// `repeat` (step & repeat), `sequential` (n-up), `cut-stack` (unique collate), `booklet`,
-    /// `bleed` or `manual`.
+    /// `bleed`, `manual`, or a page tool: `shuffle`, `reverse`, `trim-shift`, `tile`.
     pub mode: String,
     /// Press sheet width and height (portrait or landscape as given).
     pub sheet_mm: Option<[f64; 2]>,
@@ -82,9 +83,87 @@ pub struct Job {
     pub method: Option<String>,
     /// Manual: the pages on each sheet side, placed by hand.
     pub manual: Option<Vec<Vec<ManualCellMm>>>,
+    /// The page tools' settings (`shuffle`, `trim-shift`, `tile`).
+    pub page_tool: Option<PageToolMm>,
     /// What prints besides page content: `document` (default), `document-and-markups`,
     /// `document-and-stamps`, `form-fields-only`.
     pub comments_forms: Option<String>,
+}
+
+/// Settings of the page tools (shuffle even/odd, trim and shift, tile). Lengths in millimetres.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct PageToolMm {
+    /// Shuffle: `odds-first` (default), `interleave` or `keep`.
+    pub arrange: Option<String>,
+    pub reverse_evens: bool,
+    pub turn_evens: bool,
+    /// Trim and shift: `all` (default), `odd` or `even`.
+    pub pages: Option<String>,
+    /// Trim and shift: `[left, bottom, right, top]`, positive trims, negative adds white space.
+    pub trim_mm: Option<[f64; 4]>,
+    /// Trim and shift: every chosen page made this size, its content centred.
+    pub same_size_mm: Option<[f64; 2]>,
+    /// Trim and shift: `[right, up]`; with `shift_last_mm`, the first chosen page's amount.
+    pub shift_mm: Option<[f64; 2]>,
+    /// Trim and shift: the last chosen page's shift; the pages between in proportion.
+    pub shift_last_mm: Option<[f64; 2]>,
+    /// Tile: columns and rows (default 2 x 1).
+    pub cols: Option<usize>,
+    pub rows: Option<usize>,
+    pub overlap_mm: Option<f64>,
+    pub only_wide: bool,
+}
+
+/// The page tool a `shuffle`, `reverse`, `trim-shift` or `tile` job runs.
+fn page_tool(job: &Job) -> Result<PageTool, String> {
+    let d = PageToolMm::default();
+    let t = job.page_tool.as_ref().unwrap_or(&d);
+    let pair = |v: Option<[f64; 2]>| v.map(|[x, y]| (pt(x), pt(y)));
+    Ok(match job.mode.as_str() {
+        "reverse" => PageTool::Reverse,
+        "shuffle" => PageTool::Shuffle(Shuffle {
+            arrange: match t.arrange.as_deref().unwrap_or("odds-first") {
+                "odds-first" => Arrange::OddsFirst,
+                "interleave" => Arrange::Interleave,
+                "keep" => Arrange::Keep,
+                a => return Err(bad(format!("unknown arrange {a:?}"))),
+            },
+            reverse_evens: t.reverse_evens,
+            turn_evens: t.turn_evens,
+        }),
+        "trim-shift" => {
+            let pages = match t.pages.as_deref().unwrap_or("all") {
+                "all" => PageSet::All,
+                "odd" => PageSet::Odd,
+                "even" => PageSet::Even,
+                p => return Err(bad(format!("unknown pages {p:?}"))),
+            };
+            let trim = match (t.trim_mm, t.same_size_mm) {
+                (Some(_), Some(_)) => return Err(bad("give trim_mm or same_size_mm, not both")),
+                (Some([l, b, r, top]), None) => Trim::Edges([pt(l), pt(b), pt(r), pt(top)]),
+                (None, Some([w, h])) => Trim::SameSize(pt(w), pt(h)),
+                (None, None) => Trim::None,
+            };
+            let shift = match (pair(t.shift_mm), pair(t.shift_last_mm)) {
+                (None, None) => Shift::None,
+                (Some(s), None) => Shift::Fixed(s.0, s.1),
+                (Some(first), Some(last)) => Shift::Variable { first, last },
+                (None, Some(_)) => return Err(bad("shift_last_mm needs shift_mm for the first page")),
+            };
+            if trim == Trim::None && shift == Shift::None {
+                return Err(bad("trim and shift needs a trim or a shift"));
+            }
+            PageTool::TrimShift(TrimShift { pages, trim, shift })
+        }
+        "tile" => PageTool::Tile(Tile {
+            cols: t.cols.unwrap_or(2),
+            rows: t.rows.unwrap_or(1),
+            overlap: pt(t.overlap_mm.unwrap_or(0.0)),
+            only_wide: t.only_wide,
+        }),
+        m => return Err(bad(format!("{m:?} is not a page tool"))),
+    })
 }
 
 /// One page of a manual layout.
@@ -324,6 +403,12 @@ fn sheets_as_given(sizes: &[(f64, f64)], job: &Job) -> Result<Vec<Sheet>, String
         "booklet" => pdfcraft_impose::booklet(sizes, &booklet(job)?),
         "bleed" => pdfcraft_impose::add_bleed(sizes, &add_bleed(job)?),
         "manual" => pdfcraft_impose::manual(sizes, &manual_spec(job)?),
+        "shuffle" | "reverse" | "trim-shift" | "tile" => match page_tool(job)? {
+            PageTool::Reverse => pdfcraft_impose::reverse(sizes),
+            PageTool::Shuffle(s) => pdfcraft_impose::shuffle(sizes, &s),
+            PageTool::TrimShift(t) => pdfcraft_impose::trim_and_shift(sizes, &t),
+            PageTool::Tile(t) => pdfcraft_impose::tile(sizes, &t),
+        },
         m => return Err(bad(format!("unknown mode {m:?}"))),
     };
     r.map_err(|e| e.to_string())

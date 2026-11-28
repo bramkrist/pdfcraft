@@ -275,3 +275,34 @@ fn a_scaled_page_is_drawn_smaller_in_the_middle_of_its_cell() {
     assert_ne!(at(0.1, 0.5), RED, "but 10 % across is outside it: the page no longer fills its cell");
     assert_ne!(at(0.5, 0.9), RED);
 }
+
+#[test]
+fn page_tools_reverse_turn_trim_and_tile_real_pages() {
+    use pdfcraft_impose::{Arrange, PageTool, Shuffle, Tile, Trim, TrimShift, pages_document};
+    // Page 1 red, page 2 blue with a red bottom strip; 100 x 60 pt each.
+    let src = pdf(&[(100, 60, "1 0 0 rg 0 0 100 60 re f"), (100, 60, "0 0 1 rg 0 0 100 60 re f 1 0 0 rg 0 0 100 10 re f")]);
+    let doc = Document::open(Arc::new(src)).expect("open");
+    let rev = pages_document(&doc, &PageTool::Reverse, Content::Document).unwrap();
+    assert_eq!(rgb(&render(&rev, 0), 50, 30), BLUE, "page 2 first");
+    assert_eq!(rgb(&render(&rev, 1), 50, 30), RED);
+    // Page 2 upside down: its red strip now at the top.
+    let turned = Shuffle { arrange: Arrange::Keep, reverse_evens: false, turn_evens: true };
+    let out = pages_document(&doc, &PageTool::Shuffle(turned), Content::Document).unwrap();
+    let p2 = render(&out, 1);
+    assert_eq!(rgb(&p2, 50, 3), RED, "strip at the top");
+    assert_eq!(rgb(&p2, 50, 57), BLUE);
+    // Trim 10 off the bottom of page 2: the red strip is gone and the page is 50 tall.
+    let trim = TrimShift { trim: Trim::Edges([0.0, 10.0, 0.0, 0.0]), ..TrimShift::default() };
+    let out = pages_document(&doc, &PageTool::TrimShift(trim), Content::Document).unwrap();
+    let p2 = render(&out, 1);
+    assert_eq!((p2.width, p2.height), (100, 50));
+    assert_eq!(rgb(&p2, 50, 47), BLUE, "the strip was trimmed off");
+    // Two tiles across: 50 x 60 each, the right one showing the page's right half.
+    let out = pages_document(&doc, &PageTool::Tile(Tile { cols: 2, rows: 1, overlap: 0.0, only_wide: false }), Content::Document).unwrap();
+    let back = Document::open(Arc::new(out.clone())).unwrap();
+    assert_eq!(pdfcraft_print::page_sizes(&back).len(), 4);
+    let t = render(&out, 3);
+    assert_eq!((t.width, t.height), (50, 60));
+    assert_eq!(rgb(&t, 25, 55), RED, "page 2's bottom strip");
+    assert_eq!(rgb(&t, 25, 20), BLUE);
+}

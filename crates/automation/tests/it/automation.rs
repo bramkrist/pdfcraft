@@ -5520,6 +5520,59 @@ fn adding_bleed_through_tools() {
 }
 
 #[test]
+fn page_tools_through_tools() {
+    let dir = workdir("pagetools");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["pages"].as_u64().unwrap();
+    let pages = |a: &mut _, path: &str| -> u64 {
+        let d = ok(a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        ok(a, "doc_info", json!({ "doc": d }))["document"]["pages"].as_u64().unwrap()
+    };
+    assert_eq!(ok(&mut a, "doc_page_tool", json!({ "doc": doc, "tool": "reverse", "path": "rev.pdf" }))["pages"].as_u64(), Some(n));
+    assert_eq!(pages(&mut a, "rev.pdf"), n);
+    let r = ok(
+        &mut a,
+        "doc_page_tool",
+        json!({ "doc": doc, "tool": "shuffle", "arrange": "interleave", "reverse_evens": true, "turn_evens": true, "path": "shuf.pdf" }),
+    );
+    assert_eq!(r["pages"].as_u64(), Some(n));
+    let r = ok(&mut a, "doc_page_tool", json!({ "doc": doc, "tool": "tile", "cols": 2, "rows": 3, "overlap_mm": 5, "path": "tiles.pdf" }));
+    assert_eq!(r["pages"].as_u64(), Some(n * 6));
+    assert_eq!(pages(&mut a, "tiles.pdf"), n * 6);
+    let r = ok(
+        &mut a,
+        "doc_page_tool",
+        json!({ "doc": doc, "tool": "trim_shift", "pages": "odd", "trim_mm": [-5, -5, -5, -5], "shift_mm": [2, 0], "path": "ts.pdf" }),
+    );
+    assert_eq!(r["pages"].as_u64(), Some(n));
+    let first = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"][0].clone();
+    let w_mm = first["width"].as_f64().unwrap() * 25.4 / 72.0;
+    assert!((r["first_page_mm"][0].as_f64().unwrap() - (w_mm + 10.0)).abs() < 0.01, "page 1 grew 5 mm each side: {r}");
+    ok(
+        &mut a,
+        "doc_page_tool",
+        json!({ "doc": doc, "tool": "trim_shift", "pages": [1], "same_size_mm": [100, 100], "shift_first_mm": [0, 0], "shift_last_mm": [3, 0], "path": "ts2.pdf" }),
+    );
+    for bad in [
+        json!({ "doc": doc, "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "fold", "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "shuffle", "arrange": "random", "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "tile", "cols": 0, "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "tile", "cols": 2, "overlap_mm": 9000, "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "pages": [n + 1], "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "pages": "third", "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "trim_mm": [1, 2, 3], "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "trim_mm": [1, 1, 1, 1], "same_size_mm": [10, 10], "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "shift_first_mm": [1, 1], "path": "x.pdf" }),
+        json!({ "doc": doc, "tool": "trim_shift", "shift_mm": [0, 9000], "path": "x.pdf" }),
+    ] {
+        assert!(matches!(a.call("doc_page_tool", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused request writes nothing");
+}
+
+#[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");
     let mut png = Vec::new();

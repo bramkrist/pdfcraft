@@ -23,8 +23,21 @@ const MODES = [
   ['booklet', 'Booklet'],
   ['bleed', 'Bleed'],
   ['manual', 'Manual'],
+  ['pagetool', 'Alat halaman'],
 ];
-const MODE_TAG = { repeat: 'STEPREPEAT', sequential: 'NUP', 'cut-stack': 'UNIQUECOLLATE', booklet: 'BOOKLET', bleed: 'BLEED', manual: 'MANUAL' };
+// The page tools share one mode button; the job's mode is the tool itself.
+const PAGE_TOOLS = [
+  ['shuffle', 'Acak genap/ganjil'],
+  ['reverse', 'Balik urutan'],
+  ['trim-shift', 'Potong & geser'],
+  ['tile', 'Pecah jadi tile'],
+];
+const MODE_TAG = {
+  repeat: 'STEPREPEAT', sequential: 'NUP', 'cut-stack': 'UNIQUECOLLATE', booklet: 'BOOKLET', bleed: 'BLEED', manual: 'MANUAL',
+  shuffle: 'SHUFFLE', reverse: 'REVERSE', 'trim-shift': 'TRIMSHIFT', tile: 'TILES',
+};
+/** Whether the current mode makes pages (one per output page) rather than press sheets. */
+const pageMode = () => state.mode === 'bleed' || state.mode === 'pagetool';
 
 const state = {
   engine: null,
@@ -276,6 +289,33 @@ function renderOptions() {
     </div>
     <p class="hint">Tarik halaman di layout garis. <kbd>←↑→↓</kbd> geser 0,5 mm (<kbd>Shift</kbd> 5 mm) · <kbd>R</kbd> putar · <kbd>D</kbd> duplikat · <kbd>Del</kbd> hapus.</p>
     ${markFields()}`;
+  } else if (state.mode === 'pagetool') {
+    const pt = (tool, html) => `<div class="full ptgroup" data-pt="${tool}">${html}</div>`;
+    body = `<h2>Alat halaman</h2><div class="field">
+      ${sel('ptool', 'Alat', PAGE_TOOLS, 'shuffle', 'full')}
+      ${pt('shuffle', `<div class="field">
+        ${sel('arrange', 'Susunan', [['odds-first', 'Semua ganjil dulu, lalu semua genap (depan & belakang dipisah)'], ['interleave', 'Gabung depan & belakang (paruh pertama = depan)'], ['keep', 'Urutan tetap (hanya balik/putar halaman genap)']], 'odds-first', 'full')}
+        ${chk('revevens', 'Halaman genap (belakang) urutan terbalik', false)}
+        ${chk('turnevens', 'Putar halaman genap 180°', false)}
+      </div>`)}
+      ${pt('reverse', '<p class="hint">Halaman terakhir jadi yang pertama.</p>')}
+      ${pt('trim-shift', `<div class="field">
+        ${sel('tspages', 'Halaman', [['all', 'Semua'], ['odd', 'Ganjil saja'], ['even', 'Genap saja']], 'all', 'full')}
+        ${sel('tsmode', 'Ukuran halaman', [['none', 'Tidak dipotong'], ['trim', 'Potong tepi'], ['add', 'Tambah ruang putih di tepi'], ['same', 'Samakan ukuran semua halaman (isi di tengah)']], 'none', 'full')}
+        <div class="full row2" data-ts="edges">${num('tsl', 'Kiri (mm)', 0, 'min="0"')}${num('tsr', 'Kanan (mm)', 0, 'min="0"')}</div>
+        <div class="full row2" data-ts="edges">${num('tst', 'Atas (mm)', 0, 'min="0"')}${num('tsb', 'Bawah (mm)', 0, 'min="0"')}</div>
+        <div class="full row2" data-ts="same">${num('tsw', 'Lebar (mm)', 210, 'min="1"')}${num('tsh', 'Tinggi (mm)', 297, 'min="1"')}</div>
+        ${sel('shmode', 'Geser isi', [['none', 'Tidak digeser'], ['fixed', 'Sama untuk semua'], ['variable', 'Bertahap dari halaman pertama ke terakhir']], 'fixed', 'full')}
+        <div class="full row2" data-sh="first">${num('shx', 'Ke kanan (mm)', 3)}${num('shy', 'Ke atas (mm)', 0)}</div>
+        <div class="full row2" data-sh="last">${num('shx2', 'Terakhir: kanan (mm)', 0)}${num('shy2', 'Terakhir: atas (mm)', 0)}</div>
+      </div><p class="hint">Angka minus = ke kiri / ke bawah. Isi yang terdorong lewat tepi ikut terpotong; area di luar halaman tidak pernah dibuka. Halaman lain tidak diubah.</p>`)}
+      ${pt('tile', `<div class="field">
+        ${num('tcols', 'Kolom', 2, 'min="1" max="20" step="1"')}
+        ${num('trows', 'Baris', 1, 'min="1" max="20" step="1"')}
+        ${num('toverlap', 'Tumpang tindih (mm)', 0, 'min="0"')}
+        ${chk('twide', 'Hanya pecah halaman lebar (spread di antara halaman tunggal)', false)}
+      </div><p class="hint">Urutan tile dari kiri atas, baris demi baris; tiap tile jadi satu halaman.</p>`)}
+    </div><p class="hint">Hasilnya dokumen baru (tab baru); file ini tidak berubah. Link & bookmark tidak ikut.</p>`;
   } else if (state.mode === 'bleed') {
     body = `<h2>Bleed</h2><div class="field">
       ${num('add', 'Bleed (mm)', 3, 'min="0"')}
@@ -284,6 +324,7 @@ function renderOptions() {
   }
   $('opts').innerHTML = body;
   if (state.mode === 'manual') manualFieldsFromDoc();
+  if (state.mode === 'pagetool') syncPageTool();
   const fb = fileBleed(activeDoc());
   const bleedInput = document.querySelector('[data-k="bleed"]');
   if (fb !== null && bleedInput) bleedInput.value = fb;
@@ -297,6 +338,7 @@ function renderOptions() {
       syncMarkFields();
     }
     if (state.mode === 'manual' && !['mpage', 'snap'].includes(el.dataset.k)) manualSheetFromFields();
+    if (state.mode === 'pagetool') syncPageTool();
     recompute();
   }));
   recompute();
@@ -380,8 +422,39 @@ function twoUpJob(leaf) {
   return { job: j, name };
 }
 
+/** Show only the fields of the chosen page tool and of its chosen trim and shift. */
+function syncPageTool() {
+  const tool = val('ptool');
+  document.querySelectorAll('.ptgroup').forEach((g) => { g.hidden = g.dataset.pt !== tool; });
+  const ts = val('tsmode'), sh = val('shmode');
+  document.querySelectorAll('[data-ts]').forEach((g) => { g.hidden = !((g.dataset.ts === 'edges' && (ts === 'trim' || ts === 'add')) || (g.dataset.ts === 'same' && ts === 'same')); });
+  document.querySelectorAll('[data-sh]').forEach((g) => { g.hidden = sh === 'none' || (g.dataset.sh === 'last' && sh !== 'variable'); });
+}
+
+/** The job of the chosen page tool. */
+function pageToolJob() {
+  const mode = val('ptool') || 'shuffle';
+  const j = { mode };
+  if (mode === 'shuffle') j.page_tool = { arrange: val('arrange'), reverse_evens: !!val('revevens'), turn_evens: !!val('turnevens') };
+  if (mode === 'tile') j.page_tool = { cols: numOr('tcols', 2), rows: numOr('trows', 1), overlap_mm: numOr('toverlap', 0), only_wide: !!val('twide') };
+  if (mode === 'trim-shift') {
+    const t = { pages: val('tspages') };
+    const ts = val('tsmode');
+    const e = [numOr('tsl', 0), numOr('tsb', 0), numOr('tsr', 0), numOr('tst', 0)];
+    if (ts === 'trim') t.trim_mm = e;
+    if (ts === 'add') t.trim_mm = e.map((v) => -v);
+    if (ts === 'same') t.same_size_mm = [numOr('tsw', 210), numOr('tsh', 297)];
+    const sh = val('shmode');
+    if (sh !== 'none') t.shift_mm = [numOr('shx', 0), numOr('shy', 0)];
+    if (sh === 'variable') t.shift_last_mm = [numOr('shx2', 0), numOr('shy2', 0)];
+    j.page_tool = t;
+  }
+  return j;
+}
+
 function job() {
   syncBig();
+  if (state.mode === 'pagetool') return pageToolJob();
   const j = { mode: state.mode };
   if (state.mode === 'bleed') {
     j.add_bleed_mm = numOr('add', 3);
@@ -466,7 +539,7 @@ function cutterName() {
 }
 
 function jobLabel(j) {
-  const m = MODES.find(([k]) => k === j.mode)[1];
+  const m = ((MODES.find(([k]) => k === j.mode) || PAGE_TOOLS.find(([k]) => k === j.mode)) || [j.mode, j.mode])[1];
   const sheetName = j.sheet_mm ? (Object.entries(SHEETS).find(([, v]) => (v[0] === j.sheet_mm[0] && v[1] === j.sheet_mm[1]) || (v[0] === j.sheet_mm[1] && v[1] === j.sheet_mm[0])) || [`${j.sheet_mm[0]}×${j.sheet_mm[1]}`])[0] : '';
   return `${m}${sheetName ? ' ' + sheetName : ''}`;
 }
@@ -934,8 +1007,8 @@ function draw() {
   } else if (L) {
     const s = L.sheets[state.sheet];
     $('summary').innerHTML = `
-      <div class="big">${L.sheet_count}<small>${state.mode === 'bleed' ? 'halaman' : 'sisi lembar'}</small></div>
-      ${state.mode === 'bleed' ? '' : `<div class="big">${L.up_per_sheet}<small>up / lembar</small></div>`}
+      <div class="big">${L.sheet_count}<small>${pageMode() ? 'halaman' : 'sisi lembar'}</small></div>
+      ${pageMode() ? '' : `<div class="big">${L.up_per_sheet}<small>up / lembar</small></div>`}
       <div class="hint">${fmt(s.size_mm[0])} × ${fmt(s.size_mm[1])} mm</div>
       ${state.rotateHint ? `<div class="hint tryrot">Kalau baris diputar 90°: ${state.rotateHint.turned} up (sekarang ${state.rotateHint.now}). Hati-hati saat potong, terutama cetak 2 sisi. <button type="button" class="btn ghost small" id="tryrot">Coba putar</button></div>` : ''}`;
   } else {
@@ -2122,7 +2195,7 @@ async function exportFile(saveAs) {
   // The folder picker needs the click itself, so ask for the place before the work starts.
   let handle = null;
   if (picker) {
-    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[state.mode], ...(cutJob() ? ['CUT'] : []), ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
+    const guess = layoutView ? { name: `${d0.name} › ${jobLabel(job())}`, tags: [...d0.tags, MODE_TAG[job().mode], ...(cutJob() ? ['CUT'] : []), ...(state.mode === 'booklet' && bookletPer() === 2 ? ['2UP'] : [])] } : d0;
     try {
       handle = await window.showSaveFilePicker({ suggestedName: fileName(guess), types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
     } catch (e) {

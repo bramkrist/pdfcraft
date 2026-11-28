@@ -116,6 +116,7 @@ impl PdfCraftApp {
                     "manual" => Some(Dialog::ImposeManual),
                     "inks" => Some(Dialog::ImposeInks),
                     "add-bleed" => Some(Dialog::AddBleed),
+                    "page-tools" => Some(Dialog::PageTools),
                     "repeat-pages" => Some(Dialog::RepeatPages),
                     "step-repeat" => Some(Dialog::Impose(crate::impose_ui::ImposeKind::StepRepeat)),
                     "n-up" => Some(Dialog::Impose(crate::impose_ui::ImposeKind::NUp)),

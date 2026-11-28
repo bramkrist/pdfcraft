@@ -448,6 +448,15 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::ImposeInks);
             }
             "impose.add_bleed" => self.dialog = Some(Dialog::AddBleed),
+            "impose.shuffle" | "impose.reverse" | "impose.trim_shift" | "impose.tile" => {
+                self.page_tools_draft.kind = match id {
+                    "impose.reverse" => crate::pagetools_ui::ToolKind::Reverse,
+                    "impose.trim_shift" => crate::pagetools_ui::ToolKind::TrimShift,
+                    "impose.tile" => crate::pagetools_ui::ToolKind::Tile,
+                    _ => crate::pagetools_ui::ToolKind::Shuffle,
+                };
+                self.dialog = Some(Dialog::PageTools);
+            }
             "page.repeat" => {
                 self.repeat_draft.reset();
                 self.dialog = Some(Dialog::RepeatPages);

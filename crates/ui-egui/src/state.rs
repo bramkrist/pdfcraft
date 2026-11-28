@@ -121,6 +121,9 @@ pub enum Dialog {
     RepeatPages,
     /// Imposing ▸ Add bleed.
     AddBleed,
+    /// Imposing ▸ Shuffle even/odd pages, Reverse pages, Trim and shift, Tile pages (which one is
+    /// in the draft).
+    PageTools,
     /// Imposing ▸ Step and repeat, n-up pages, Create booklet: the imposition wizards.
     Impose(crate::impose_ui::ImposeKind),
     /// Imposing ▸ Manual: pages placed by hand on the sheet.

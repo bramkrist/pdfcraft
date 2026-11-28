@@ -866,6 +866,33 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "path"],
         )),
+        t(
+            "doc_page_tool",
+            "Page tools (reverse, shuffle, trim and shift, tile)",
+            "Make a new PDF at path from the document's pages, as a press-room imposition plug-in's page tools do; the document itself is not changed. Pages are placed, not redrawn (content, images and fonts untouched); links and bookmarks do not carry over. tool reverse: the pages last first. tool shuffle: arrange odds-first (default; all odd pages, then all even pages, to print fronts and backs apart), interleave (the reverse: the first half are fronts, the rest backs, joined front, back, front, back) or keep (order unchanged); reverse_evens takes the even pages (the backs) in reverse order; turn_evens turns them upside down. tool trim_shift: pages all (default), odd, even or a list of 1-based page numbers (the others are kept as they are); trim_mm [left, bottom, right, top] trims that much off each edge, a negative value adds white space beyond it (nothing outside the page is uncovered), or same_size_mm [w, h] makes every chosen page that size with its content centred; shift_mm [x, y] moves the content of every chosen page (x right, y up), or shift_first_mm and shift_last_mm spread the shift in proportion from the first chosen page to the last; content pushed past the edge is cut. tool tile: each page split into cols x rows equal tiles (default 2 x 1) from the top left, row by row, neighbours sharing overlap_mm; only_wide splits only pages wider than tall (spreads among single pages). Not yet: tiles by a list of widths and heights, overlap made into bleed, keeping the bleed and trim boxes through a trim.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "tool": { "type": "string", "enum": ["reverse", "shuffle", "trim_shift", "tile"] },
+                "arrange": { "type": "string", "enum": ["keep", "odds-first", "interleave"] },
+                "reverse_evens": { "type": "boolean" },
+                "turn_evens": { "type": "boolean" },
+                "pages": { "oneOf": [{ "type": "string", "enum": ["all", "odd", "even"] }, { "type": "array", "items": { "type": "integer", "minimum": 1 } }] },
+                "trim_mm": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                "same_size_mm": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "minItems": 2, "maxItems": 2 },
+                "shift_mm": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "shift_first_mm": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "shift_last_mm": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "cols": { "type": "integer", "minimum": 1 },
+                "rows": { "type": "integer", "minimum": 1 },
+                "overlap_mm": { "type": "number", "minimum": 0 },
+                "only_wide": { "type": "boolean" },
+                "comments_forms": { "type": "string", "enum": ["document", "document-and-markups", "document-and-stamps", "form-fields-only"] },
+            }),
+            &["doc", "path", "tool"],
+        )),
         t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

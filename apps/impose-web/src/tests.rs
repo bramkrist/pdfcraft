@@ -518,3 +518,39 @@ fn a_job_name_is_cleaned_not_trusted() {
     let made = impose_cut_job(source.clone(), &job, &cut, &traced(&source, &job, &cut)).expect("job");
     assert_eq!(made.files[0].name, "tokostiker7.plt");
 }
+
+#[test]
+fn page_tools_run_as_modes() {
+    let a4 = [[210.0, 297.0]; 5];
+    // Shuffle: odds first, evens turned; the picture says which are turned.
+    let l = layout(&a4, &job(r#"{"mode":"shuffle","page_tool":{"turn_evens":true}}"#)).unwrap();
+    let order: Vec<usize> = l.sheets.iter().map(|s| s.cells[0].page).collect();
+    assert_eq!(order, vec![0, 2, 4, 1, 3]);
+    let turns: Vec<i32> = l.sheets.iter().map(|s| s.cells[0].turn).collect();
+    assert_eq!(turns, vec![0, 0, 0, 180, 180]);
+    let l = layout(&a4, &job(r#"{"mode":"reverse"}"#)).unwrap();
+    assert_eq!(l.sheets[0].cells[0].page, 4);
+    // Tile 2 x 2 with 10 mm overlap: 20 pages of 110 x 153.5 mm.
+    let l = layout(&a4, &job(r#"{"mode":"tile","page_tool":{"cols":2,"rows":2,"overlap_mm":10}}"#)).unwrap();
+    assert_eq!(l.sheet_count, 20);
+    assert!((l.sheets[0].size_mm[0] - 110.0).abs() < 1e-6 && (l.sheets[0].size_mm[1] - 153.5).abs() < 1e-6);
+    // Trim and shift: 5 mm added round the odd pages, which grow; evens stay A4.
+    let l = layout(&a4, &job(r#"{"mode":"trim-shift","page_tool":{"pages":"odd","trim_mm":[-5,-5,-5,-5]}}"#)).unwrap();
+    assert!((l.sheets[0].size_mm[0] - 220.0).abs() < 1e-6);
+    assert!((l.sheets[1].size_mm[0] - 210.0).abs() < 1e-6);
+    // The real PDF comes out with the tiles.
+    let out = impose(pdf(2, 200, 100), &job(r#"{"mode":"tile","page_tool":{"cols":2,"rows":1}}"#)).unwrap();
+    assert_eq!(page_sizes(out).unwrap().len(), 4);
+    for bad in [
+        r#"{"mode":"trim-shift"}"#,
+        r#"{"mode":"trim-shift","page_tool":{"trim_mm":[1,1,1,1],"same_size_mm":[10,10]}}"#,
+        r#"{"mode":"trim-shift","page_tool":{"shift_last_mm":[1,1]}}"#,
+        r#"{"mode":"trim-shift","page_tool":{"pages":"third","shift_mm":[1,1]}}"#,
+        r#"{"mode":"shuffle","page_tool":{"arrange":"random"}}"#,
+        r#"{"mode":"tile","page_tool":{"cols":0}}"#,
+        r#"{"mode":"tile","page_tool":{"cols":2,"overlap_mm":500}}"#,
+    ] {
+        assert!(layout(&a4, &job(bad)).is_err(), "{bad}");
+    }
+    assert!(parse_job(r#"{"mode":"tile","page_tool":{"colz":2}}"#).is_err(), "unknown fields are refused");
+}

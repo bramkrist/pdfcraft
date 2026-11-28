@@ -285,6 +285,7 @@ impl PdfCraftApp {
             inks_draft: Default::default(),
             repeat_draft: Default::default(),
             bleed_draft: Default::default(),
+            page_tools_draft: Default::default(),
             marks_draft: Default::default(),
             unmarked_page: Default::default(),
             export_draft: Default::default(),

@@ -755,6 +755,7 @@ impl Automation {
             "doc_inks" => self.doc_inks(&a)?,
             "doc_inks_apply" => self.doc_inks_apply(&a)?,
             "doc_bleed" => self.doc_bleed(&a)?,
+            "doc_page_tool" => self.doc_page_tool(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;

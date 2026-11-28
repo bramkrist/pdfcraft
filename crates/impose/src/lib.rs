@@ -33,6 +33,7 @@ mod cut;
 #[cfg(test)]
 mod cut_tests;
 mod manual;
+mod pages;
 
 pub use bleed::{AddBleed, BleedMethod, add_bleed};
 pub use booklet::{Align, Binding, Booklet, LastSignature, booklet};
@@ -41,6 +42,7 @@ pub use cut::{
     trace_resolution,
 };
 pub use manual::{Manual, ManualPage, manual};
+pub use pages::{Arrange, MAX_TILES_PER_PAGE, PageSet, Shift, Shuffle, Tile, Trim, TrimShift, reverse, shuffle, shuffle_order, tile, trim_and_shift};
 /// Contour tracing, for the settings of [`CutSpec`] (`Holes`, `Background`) and the tracer itself.
 pub use pdfcraft_cutline as cutline;
 pub use pdfcraft_cutter as cutter;
@@ -756,12 +758,36 @@ pub fn bleed_document(src: &Document, spec: &AddBleed, content: Content) -> Resu
     Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
 }
 
+/// A page tool (`reverse`, `shuffle`, `trim_and_shift`, `tile`) on every page of `src`, written as
+/// a new PDF (see [`impose_document`] for annotations and encryption).
+pub fn pages_document(src: &Document, tool: &PageTool, content: Content) -> Result<Vec<u8>, DocumentError> {
+    let sizes = pdfcraft_print::page_sizes(src);
+    let sheets = match tool {
+        PageTool::Reverse => reverse(&sizes)?,
+        PageTool::Shuffle(s) => shuffle(&sizes, s)?,
+        PageTool::TrimShift(t) => trim_and_shift(&sizes, t)?,
+        PageTool::Tile(t) => tile(&sizes, t)?,
+    };
+    Ok(pdfcraft_print::impose_sheets(src, &sheets, content)?)
+}
+
+/// One of the page tools, for [`pages_document`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum PageTool {
+    Reverse,
+    Shuffle(Shuffle),
+    TrimShift(TrimShift),
+    Tile(Tile),
+}
+
 #[cfg(test)]
 mod bleed_tests;
 #[cfg(test)]
 mod booklet_tests;
 #[cfg(test)]
 mod manual_tests;
+#[cfg(test)]
+mod pages_tests;
 /// Two booklets to a press sheet: the big sheet the booklet sheets are laid on, two to a side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TwoUp {

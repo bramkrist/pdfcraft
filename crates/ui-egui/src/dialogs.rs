@@ -17,6 +17,7 @@ pub(super) mod inks_ui;
 pub(super) mod manual_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
+pub(super) mod pagetools_ui;
 pub(super) mod palette;
 pub(super) mod preferences;
 mod prompts;
@@ -53,6 +54,7 @@ struct Pending {
     inks_now: bool,
     repeat_now: bool,
     bleed_now: bool,
+    page_tools_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -456,6 +458,13 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             ui.set_width(460.0);
             let (go, cancel) = crate::bleed_ui::body(ui, app, &t);
             req.bleed_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::PageTools => {
+            ui.set_width(520.0);
+            let (go, cancel) = crate::pagetools_ui::body(ui, app);
+            req.page_tools_now = go;
             req.close = go || cancel;
             return false;
         }
@@ -1987,6 +1996,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     }
     if req.bleed_now {
         crate::bleed_ui::finish(app);
+    }
+    if req.page_tools_now {
+        crate::pagetools_ui::finish(app);
     }
     if req.repeat_now && app.apply_edit(app.repeat_draft.edit()) {
         app.repeat_draft.reset();

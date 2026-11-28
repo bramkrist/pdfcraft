@@ -4,8 +4,8 @@
 
 use pdfcraft_engine::impose::cutline::{Background, Holes};
 use pdfcraft_engine::impose::{
-    self, AddBleed, Align, Binding, BleedMethod, Booklet, CutSpec, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle, Marks,
-    StepRepeat,
+    self, AddBleed, Align, Arrange, Binding, BleedMethod, Booklet, CutSpec, Duplex, Fill, LastSignature, Manual, ManualPage, Margins, MarkStyle,
+    Marks, PageSet, PageTool, Shift, Shuffle, StepRepeat, Tile, Trim, TrimShift,
 };
 use pdfcraft_engine::print::Content;
 use serde_json::{Value, json};
@@ -405,6 +405,97 @@ impl Automation {
         Ok(
             json!({ "converted": report.converted, "aliased": report.aliased, "kept": report.kept, "bytes": bytes.len(), "path": path.to_string_lossy() }),
         )
+    }
+
+    /// `doc_page_tool`: reverse, shuffle even/odd, trim and shift, or tile the pages into a new PDF.
+    pub(crate) fn doc_page_tool(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let n = doc.info.pages.len();
+        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        let pair = |key: &str| -> Result<Option<(f64, f64)>> {
+            match a.get(key) {
+                None => Ok(None),
+                Some(v) => {
+                    let xy = v.as_array().filter(|v| v.len() == 2).and_then(|v| Some((v.first()?.as_f64()?, v.get(1)?.as_f64()?)));
+                    xy.map(|(x, y)| Some((x * MM, y * MM))).ok_or_else(|| bad(format!("{key} must be [x_mm, y_mm]")))
+                }
+            }
+        };
+        let tool = match a.str("tool")? {
+            "reverse" => PageTool::Reverse,
+            "shuffle" => PageTool::Shuffle(Shuffle {
+                arrange: match a.opt_str("arrange")?.unwrap_or("odds-first") {
+                    "keep" => Arrange::Keep,
+                    "odds-first" => Arrange::OddsFirst,
+                    "interleave" => Arrange::Interleave,
+                    m => return Err(bad(format!("unknown arrange {m:?}"))),
+                },
+                reverse_evens: a.opt_bool("reverse_evens")?.unwrap_or(false),
+                turn_evens: a.opt_bool("turn_evens")?.unwrap_or(false),
+            }),
+            "trim_shift" => {
+                let pages = match a.get("pages") {
+                    None => PageSet::All,
+                    Some(Value::String(s)) => match s.as_str() {
+                        "all" => PageSet::All,
+                        "odd" => PageSet::Odd,
+                        "even" => PageSet::Even,
+                        s => return Err(bad(format!("pages must be all, odd, even or a list of page numbers, not {s:?}"))),
+                    },
+                    Some(Value::Array(v)) => {
+                        let mut list = Vec::with_capacity(v.len().min(n));
+                        for p in v {
+                            match p.as_u64().and_then(|p| usize::try_from(p).ok()) {
+                                Some(p) if (1..=n).contains(&p) => list.push(p - 1),
+                                _ => return Err(bad(format!("pages: {p} is not a page of this {n}-page document"))),
+                            }
+                        }
+                        PageSet::Listed(list)
+                    }
+                    Some(_) => return Err(bad("pages must be all, odd, even or a list of page numbers")),
+                };
+                let trim = match (a.get("trim_mm"), pair("same_size_mm")?) {
+                    (Some(_), Some(_)) => return Err(bad("give trim_mm or same_size_mm, not both")),
+                    (None, Some((w, h))) => Trim::SameSize(w, h),
+                    (None, None) => Trim::None,
+                    (Some(v), None) => {
+                        let e: Option<Vec<f64>> = v.as_array().filter(|v| v.len() == 4).map(|v| v.iter().filter_map(Value::as_f64).collect());
+                        match e.as_deref() {
+                            Some(&[l, b, r, t]) => Trim::Edges([l * MM, b * MM, r * MM, t * MM]),
+                            _ => return Err(bad("trim_mm must be [left, bottom, right, top] in mm (negative adds space)")),
+                        }
+                    }
+                };
+                let shift = match (pair("shift_mm")?, pair("shift_first_mm")?, pair("shift_last_mm")?) {
+                    (None, None, None) => Shift::None,
+                    (Some(s), None, None) => Shift::Fixed(s.0, s.1),
+                    (None, Some(first), Some(last)) => Shift::Variable { first, last },
+                    _ => return Err(bad("give shift_mm, or both shift_first_mm and shift_last_mm")),
+                };
+                PageTool::TrimShift(TrimShift { pages, trim, shift })
+            }
+            "tile" => PageTool::Tile(Tile {
+                cols: count(a, "cols")?.unwrap_or(2),
+                rows: count(a, "rows")?.unwrap_or(1),
+                overlap: mm(a, "overlap_mm")?.unwrap_or(0.0),
+                only_wide: a.opt_bool("only_wide")?.unwrap_or(false),
+            }),
+            t => return Err(bad(format!("unknown tool {t:?}"))),
+        };
+        let sheets = match &tool {
+            PageTool::Reverse => impose::reverse(&sizes),
+            PageTool::Shuffle(s) => impose::shuffle(&sizes, s),
+            PageTool::TrimShift(t) => impose::trim_and_shift(&sizes, t),
+            PageTool::Tile(t) => impose::tile(&sizes, t),
+        }
+        .map_err(|e| bad(e.to_string()))?;
+        let content = content_arg(a)?;
+        let bytes = self.session.pages_pdf(id, &tool, content).map_err(failed)?;
+        let path = self.resolve(a.str("path")?, true)?;
+        write_atomic(&path, &bytes)?;
+        let first = sheets.first().map(|s| s.size).unwrap_or_default();
+        Ok(json!({ "pages": sheets.len(), "first_page_mm": [first.0 / MM, first.1 / MM], "bytes": bytes.len(), "path": path.to_string_lossy() }))
     }
 
     /// `doc_bleed`: add bleed around every page and save the print-ready PDF.

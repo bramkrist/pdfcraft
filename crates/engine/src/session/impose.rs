@@ -80,6 +80,14 @@ impl Session {
         crate::impose::bleed_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// Document `id` run through a page tool (`pdfcraft-impose`: reverse, shuffle even/odd pages,
+    /// trim and shift, tile pages), as a new PDF; the document is not changed. The same
+    /// permissions and layer rules apply as for [`Session::impose_pdf`].
+    pub fn pages_pdf(&self, id: DocId, tool: &crate::impose::PageTool, content: print::Content) -> Result<Vec<u8>, EditError> {
+        let cos = self.imposition_source(id)?;
+        crate::impose::pages_document(&cos, tool, content).map_err(|e| EditError::Print(e.to_string()))
+    }
+
     /// The spot colours document `id` uses and the pages (1-based) each is on, in name order: what
     /// the ink manager offers. Reads the document as it stands, edits included; never changes it.
     pub fn spot_inks(&self, id: DocId) -> Result<Vec<crate::SpotInk>, EditError> {
