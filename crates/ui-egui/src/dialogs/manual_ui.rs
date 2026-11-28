@@ -14,6 +14,7 @@ use pdfcraft_engine::print::Placement;
 
 use crate::impose_ui::{PRESETS, footprint as footprint_pt};
 use crate::theme;
+use crate::units::Unit;
 use crate::{PdfCraftApp, widgets};
 
 const MM: f64 = 72.0 / 25.4;
@@ -670,12 +671,36 @@ fn canvas(ui: &mut egui::Ui, d: &mut ManualDraft, sizes: &[(f64, f64)]) {
     p.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.5, Color32::from_gray(140)), egui::StrokeKind::Inside);
 }
 
-fn mm_field(ui: &mut egui::Ui, v: &mut f64, range: std::ops::RangeInclusive<f64>) -> egui::Response {
-    ui.add(egui::DragValue::new(v).speed(0.1).range(range).max_decimals(2).suffix(" mm"))
+/// Units of `unit` in a millimetre.
+fn per_mm(unit: Unit) -> f64 {
+    unit.per_point() * 72.0 / 25.4
+}
+
+/// A length in millimetres written in the app's unit, e.g. "0.50 mm" or "0.02 in".
+fn length(unit: Unit, mm: f64) -> String {
+    format!("{:.d$} {}", tame(mm) * per_mm(unit), unit.label(), d = unit.decimals())
+}
+
+/// A length kept in millimetres, shown and typed in the app's unit. The value is written back only
+/// when the field is edited, so showing it never rounds it.
+fn mm_field(ui: &mut egui::Ui, v: &mut f64, range: std::ops::RangeInclusive<f64>, unit: Unit) -> egui::Response {
+    let k = per_mm(unit);
+    let mut shown = *v * k;
+    let r = ui.add(
+        egui::DragValue::new(&mut shown)
+            .speed(unit.speed() * 0.2)
+            .range(range.start() * k..=range.end() * k)
+            .max_decimals(unit.decimals() + 1)
+            .suffix(format!(" {}", unit.label())),
+    );
+    if r.changed() {
+        *v = tame(shown / k);
+    }
+    r
 }
 
 /// The sheet and bleed controls.
-fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft) {
+fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft, unit: Unit) {
     egui::Grid::new("manual-sheet").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
         ui.label(tl!("Sheet"));
         let label = PRESETS.get(d.preset).map_or(tl!("Custom"), |p| p.0);
@@ -688,10 +713,10 @@ fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft) {
         ui.end_row();
         if d.preset >= PRESETS.len() {
             ui.label(tl!("Width"));
-            mm_field(ui, &mut d.custom.0, 50.0..=2000.0);
+            mm_field(ui, &mut d.custom.0, 50.0..=2000.0, unit);
             ui.end_row();
             ui.label(tl!("Height"));
-            mm_field(ui, &mut d.custom.1, 50.0..=2000.0);
+            mm_field(ui, &mut d.custom.1, 50.0..=2000.0, unit);
             ui.end_row();
         }
         ui.label(tl!("Direction"));
@@ -701,7 +726,7 @@ fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft) {
         });
         ui.end_row();
         ui.label(tl!("Bleed in the file"));
-        mm_field(ui, &mut d.bleed, 0.0..=50.0);
+        mm_field(ui, &mut d.bleed, 0.0..=50.0, unit);
         ui.end_row();
     });
     ui.add(widgets::checkbox(&mut d.marks, tl!("Trim marks")));
@@ -709,31 +734,26 @@ fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft) {
 }
 
 /// The selected page's position and the buttons that act on it.
-fn selection_controls(ui: &mut egui::Ui, d: &mut ManualDraft, sizes: &[(f64, f64)]) {
+fn selection_controls(ui: &mut egui::Ui, d: &mut ManualDraft, sizes: &[(f64, f64)], unit: Unit) {
     let Some(c) = d.sel.and_then(|i| d.side().get(i).copied()) else { return };
     let (fw, fh) = footprint(sizes, &c);
     ui.separator();
     ui.label(
         egui::RichText::new(crate::i18n::fmt(
-            tl!("Page {n} · turned {deg}° · {w} × {h} mm"),
-            &[
-                ("n", &(c.page + 1).to_string()),
-                ("deg", &(u32::from(c.turns) * 90).to_string()),
-                ("w", &format!("{fw:.1}")),
-                ("h", &format!("{fh:.1}")),
-            ],
+            tl!("Page {n} · turned {deg}° · {w} × {h}"),
+            &[("n", &(c.page + 1).to_string()), ("deg", &(u32::from(c.turns) * 90).to_string()), ("w", &length(unit, fw)), ("h", &length(unit, fh))],
         ))
         .strong(),
     );
     if let Some((mut left, mut top)) = d.trim_from_edges(sizes) {
         egui::Grid::new("manual-pos").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
             ui.label(tl!("From the left (trim)"));
-            if mm_field(ui, &mut left, -FAR..=FAR).changed() {
+            if mm_field(ui, &mut left, -FAR..=FAR, unit).changed() {
                 d.set_trim_left(left);
             }
             ui.end_row();
             ui.label(tl!("From the top (trim)"));
-            if mm_field(ui, &mut top, -FAR..=FAR).changed() {
+            if mm_field(ui, &mut top, -FAR..=FAR, unit).changed() {
                 d.set_trim_top(sizes, top);
             }
             ui.end_row();
@@ -783,6 +803,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
     let Some((_, id)) = app.active_ids() else { return (false, true) };
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width) / MM, f64::from(p.height) / MM)).collect();
+    let unit = app.units;
     let d = &mut app.manual_draft;
     d.attach(id, sizes.len());
     let mut seed_error = None;
@@ -807,7 +828,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.set_width(220.0);
-            sheet_controls(ui, d);
+            sheet_controls(ui, d, unit);
             ui.separator();
             ui.horizontal(|ui| {
                 let pages = sizes.len();
@@ -841,9 +862,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
                     d.sheet_del();
                 }
             });
-            selection_controls(ui, d, &sizes);
+            selection_controls(ui, d, &sizes, unit);
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!("Drag a page. Arrows nudge 0.5 mm (Shift 5 mm), R turns, D copies, Delete removes.")).small().weak());
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt(
+                    tl!("Drag a page. Arrows nudge {small} (Shift {big}), R turns, D copies, Delete removes."),
+                    &[("small", &length(unit, 0.5)), ("big", &length(unit, 5.0))],
+                ))
+                .small()
+                .weak(),
+            );
         });
     });
     if let Some(e) = seed_error {
@@ -1355,5 +1383,48 @@ mod tests {
         h.step();
         assert_eq!(h.state().d.side().len(), 1, "typing in a field elsewhere must not edit the sheet");
         assert_eq!(h.state().d.sheets[0][0].x, 10.0);
+    }
+
+    #[test]
+    fn lengths_are_written_in_the_apps_unit_with_its_decimals() {
+        assert_eq!(length(Unit::Millimetres, 0.5), "0.5 mm");
+        assert_eq!(length(Unit::Inches, 25.4), "1.00 in");
+        assert_eq!(length(Unit::Centimetres, 25.0), "2.50 cm");
+        assert_eq!(length(Unit::Points, 25.4), "72.0 pt");
+        assert_eq!(length(Unit::Inches, f64::NAN), "0.00 in", "a broken number never reaches the screen");
+    }
+
+    /// A length field alone in a harness, holding `v` mm and shown in `unit`.
+    fn field(v: f64, unit: Unit) -> egui_kittest::Harness<'static, f64> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 80.0)).build_ui_state(
+            move |ui, v: &mut f64| {
+                mm_field(ui, v, 0.0..=1000.0, unit);
+            },
+            v,
+        );
+        h.run();
+        h
+    }
+
+    #[test]
+    fn showing_a_length_in_inches_does_not_round_it() {
+        let mut h = field(423.869, Unit::Inches);
+        h.run();
+        assert_eq!(*h.state(), 423.869, "only an edit writes the value back");
+    }
+
+    #[test]
+    fn typing_a_length_in_inches_stores_millimetres() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = field(10.0, Unit::Inches);
+        h.get_by_role(egui::accesskit::Role::SpinButton).focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run();
+        h.event(egui::Event::Text("2".into()));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!((*h.state() - 50.8).abs() < 1e-6, "2 in is 50.8 mm, got {}", h.state());
     }
 }
