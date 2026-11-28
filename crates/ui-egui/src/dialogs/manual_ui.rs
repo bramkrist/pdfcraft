@@ -569,7 +569,10 @@ fn canvas(ui: &mut egui::Ui, d: &mut ManualDraft, sizes: &[(f64, f64)]) {
 
     if resp.drag_started() || resp.clicked() {
         resp.request_focus();
-        if let Some(p) = resp.interact_pointer_pos() {
+        // A drag starts only after the pointer has moved a little; the page is taken hold of where the
+        // button went down, or it would lag the pointer by that distance (or be missed altogether).
+        let down = if resp.drag_started() { ui.input(|i| i.pointer.press_origin()) } else { None };
+        if let Some(p) = down.or_else(|| resp.interact_pointer_pos()) {
             let pt = to_mm(p);
             match d.hit(sizes, pt) {
                 Some(i) if resp.drag_started() => d.grab(i, pt),
@@ -1198,5 +1201,159 @@ mod tests {
         assert_eq!(d.hit(&s, (120.0, 50.0)), Some(1), "overlap: the later page is on top");
         assert_eq!(d.hit(&s, (50.0, 50.0)), Some(0));
         assert_eq!(d.hit(&s, (400.0, 300.0)), None);
+    }
+
+    /// The canvas alone in a harness: the draft, the pages, and where the sheet was drawn.
+    struct Rig {
+        d: ManualDraft,
+        sizes: Vec<(f64, f64)>,
+        top_left: egui::Pos2,
+        fonts: bool,
+    }
+
+    impl Rig {
+        const K: f32 = 430.0 / 480.0;
+
+        /// Screen position of a point on the 480 × 320 mm sheet, in millimetres.
+        fn px(top_left: egui::Pos2, x: f64, y: f64) -> egui::Pos2 {
+            pos2(top_left.x + x as f32 * Self::K, top_left.y + (320.0 - y as f32) * Self::K)
+        }
+    }
+
+    fn rig(cells: Vec<Cell>, pages: usize) -> egui_kittest::Harness<'static, Rig> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(700.0, 500.0)).build_ui_state(
+            |ui, r: &mut Rig| {
+                // Fonts only take effect on the frame after they are set, and the canvas writes text.
+                if !r.fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    r.fonts = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                r.top_left = ui.next_widget_position();
+                let sizes = r.sizes.clone();
+                canvas(ui, &mut r.d, &sizes);
+            },
+            Rig { d: draft(cells), sizes: pages_of(pages), top_left: pos2(0.0, 0.0), fonts: false },
+        );
+        h.run();
+        h
+    }
+
+    fn pages_of(n: usize) -> Vec<(f64, f64)> {
+        pages(n)
+    }
+
+    /// Press at `from`, pull through the middle to `to`, let go.
+    fn drag(h: &mut egui_kittest::Harness<'static, Rig>, from: (f64, f64), to: (f64, f64)) {
+        let tl = h.state().top_left;
+        let (a, b) = (Rig::px(tl, from.0, from.1), Rig::px(tl, to.0, to.1));
+        h.hover_at(a);
+        h.step();
+        h.drag_at(a);
+        h.step();
+        h.hover_at(a.lerp(b, 0.5));
+        h.step();
+        h.hover_at(b);
+        h.step();
+        h.step();
+        h.drop_at(b);
+        h.step();
+        h.step();
+    }
+
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 0.25
+    }
+
+    #[test]
+    fn dragging_with_the_pointer_moves_the_page_by_the_distance_and_selects_it() {
+        let mut h = rig(vec![at(0, 10.0, 10.0)], 1);
+        // Take hold at the page's centre (84, 115) and pull 100 mm right, 20 up. Nothing is near enough to snap to.
+        drag(&mut h, (84.0, 115.0), (184.0, 135.0));
+        let c = h.state().d.sheets[0][0];
+        assert!(near(c.x, 110.0) && near(c.y, 30.0), "moved to {c:?}");
+        assert_eq!(h.state().d.sel, Some(0));
+        assert!(h.state().d.guides.is_empty(), "the guides go when the page is let go");
+        assert!(h.state().d.drag.is_none());
+    }
+
+    #[test]
+    fn dragging_near_a_neighbours_edge_pulls_onto_it_and_alt_turns_that_off() {
+        let cells = vec![at(0, 10.0, 10.0), at(1, 200.0, 10.0)];
+        // The second page's left edge is 200; the first (148 wide) ends at 158 and is pulled 3 mm toward it,
+        // which is about 2.7 px: well inside the 8 px reach.
+        let mut h = rig(cells.clone(), 2);
+        drag(&mut h, (84.0, 115.0), (84.0 + 40.0, 115.0));
+        let c = h.state().d.sheets[0][0];
+        assert_eq!(c.x, 52.0, "right edge (148 + 52) lands on the neighbour's left edge at 200");
+
+        let mut h = rig(cells, 2);
+        h.state_mut().d.snap = false;
+        drag(&mut h, (84.0, 115.0), (84.0 + 40.0, 115.0));
+        assert!(near(h.state().d.sheets[0][0].x, 50.0), "with snap off the page stays where the pointer put it");
+    }
+
+    #[test]
+    fn a_click_selects_the_page_under_it_and_a_click_on_nothing_selects_nothing() {
+        let mut h = rig(vec![at(0, 10.0, 10.0), at(1, 200.0, 10.0)], 2);
+        let tl = h.state().top_left;
+        for (pt, want) in [((270.0, 100.0), Some(1)), ((184.0 + 0.0, 300.0), None), ((50.0, 50.0), Some(0))] {
+            let p = Rig::px(tl, pt.0, pt.1);
+            h.hover_at(p);
+            h.step();
+            h.drag_at(p);
+            h.step();
+            h.drop_at(p);
+            h.step();
+            h.step();
+            assert_eq!(h.state().d.sel, want, "click at {pt:?}");
+        }
+    }
+
+    #[test]
+    fn arrows_nudge_shift_arrows_nudge_more_and_r_d_and_delete_work_on_the_selected_page() {
+        let mut h = rig(vec![at(0, 10.0, 10.0)], 1);
+        let tl = h.state().top_left;
+        let p = Rig::px(tl, 84.0, 115.0);
+        h.hover_at(p);
+        h.step();
+        h.drag_at(p);
+        h.step();
+        h.drop_at(p);
+        h.step();
+        h.step();
+        assert_eq!(h.state().d.sel, Some(0));
+
+        h.key_press(egui::Key::ArrowRight);
+        h.step();
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowUp);
+        h.step();
+        let c = h.state().d.sheets[0][0];
+        assert_eq!((c.x, c.y), (10.5, 15.0), "0.5 mm right, 5 mm up");
+
+        h.key_press(egui::Key::R);
+        h.step();
+        assert_eq!(h.state().d.sheets[0][0].turns, 1);
+
+        h.key_press(egui::Key::D);
+        h.step();
+        assert_eq!(h.state().d.side().len(), 2, "a copy");
+        assert_eq!(h.state().d.sel, Some(1));
+
+        h.key_press(egui::Key::Delete);
+        h.step();
+        assert_eq!((h.state().d.side().len(), h.state().d.sel), (1, None));
+    }
+
+    #[test]
+    fn keys_do_nothing_when_the_canvas_does_not_have_the_focus() {
+        let mut h = rig(vec![at(0, 10.0, 10.0)], 1);
+        h.state_mut().d.sel = Some(0);
+        h.key_press(egui::Key::ArrowRight);
+        h.key_press(egui::Key::Delete);
+        h.step();
+        assert_eq!(h.state().d.side().len(), 1, "typing in a field elsewhere must not edit the sheet");
+        assert_eq!(h.state().d.sheets[0][0].x, 10.0);
     }
 }
