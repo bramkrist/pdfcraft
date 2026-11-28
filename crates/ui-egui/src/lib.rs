@@ -105,6 +105,7 @@ pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
 use dialogs::impose_ui;
+use dialogs::inks_ui;
 use dialogs::manual_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
@@ -656,6 +657,7 @@ pub struct PdfCraftApp {
     pub impose_draft: impose_ui::ImposeDraft,
     /// Imposing ▸ Manual editor state.
     pub manual_draft: manual_ui::ManualDraft,
+    pub inks_draft: inks_ui::InksDraft,
     /// Repeat pages dialog state.
     pub repeat_draft: repeat_ui::RepeatDraft,
     /// Add bleed dialog state.

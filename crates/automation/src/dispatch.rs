@@ -752,6 +752,8 @@ impl Automation {
             "doc_impose" => self.doc_impose(&a)?,
             "doc_booklet" => self.doc_booklet(&a)?,
             "doc_impose_manual" => self.doc_impose_manual(&a)?,
+            "doc_inks" => self.doc_inks(&a)?,
+            "doc_inks_apply" => self.doc_inks_apply(&a)?,
             "doc_bleed" => self.doc_bleed(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;

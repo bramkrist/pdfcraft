@@ -80,6 +80,34 @@ impl Session {
         crate::impose::bleed_document(&cos, spec, content).map_err(|e| EditError::Print(e.to_string()))
     }
 
+    /// The spot colours document `id` uses and the pages (1-based) each is on, in name order: what
+    /// the ink manager offers. Reads the document as it stands, edits included; never changes it.
+    pub fn spot_inks(&self, id: DocId) -> Result<Vec<crate::SpotInk>, EditError> {
+        let bytes = self.save_bytes(id)?;
+        let password = self.get(id).ok_or(EditError::NoDocument)?.password.clone();
+        crate::guard(|| {
+            let cos = pdfcraft_cos::Document::open_with_password(bytes, password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?;
+            Ok(pdfcraft_prepress::analyze(&cos).inks.spots)
+        })
+        .map_err(EditError::Write)?
+    }
+
+    /// Document `id` with its spot colours merged or printed in process by `actions` (spot name to
+    /// what to do; see `pdfcraft_prepress::inks`), as a new PDF, with what was done. The document
+    /// is not changed. Printing must be permitted, as for imposition: the result is a print file.
+    pub fn manage_inks_pdf(
+        &self,
+        id: DocId,
+        actions: &std::collections::BTreeMap<String, crate::inks::InkAction>,
+    ) -> Result<(Vec<u8>, crate::inks::InkReport), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if !doc.allows_printing() {
+            return Err(EditError::NotPermitted("printing"));
+        }
+        let bytes = self.save_bytes(id)?;
+        crate::guard(|| crate::inks::manage_inks(bytes.as_ref().clone(), actions)).map_err(EditError::Write)?.map_err(EditError::Write)
+    }
+
     /// The document as imposition reads it: printing permitted, layers as shown.
     fn imposition_source(&self, id: DocId) -> Result<pdfcraft_cos::Document, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;

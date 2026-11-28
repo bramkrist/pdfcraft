@@ -443,6 +443,10 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::Impose(kind));
             }
             "impose.manual" => self.dialog = Some(Dialog::ImposeManual),
+            "impose.inks" => {
+                self.inks_draft.reset();
+                self.dialog = Some(Dialog::ImposeInks);
+            }
             "impose.add_bleed" => self.dialog = Some(Dialog::AddBleed),
             "page.repeat" => {
                 self.repeat_draft.reset();

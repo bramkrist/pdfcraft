@@ -405,6 +405,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("impose.n_up", "n-up pages…", IMPOSING, None, Printing, "layout-grid"),
     c("impose.unique_collate", "Unique collate…", IMPOSING, None, Printing, "layers"),
     c("impose.manual", "Manual…", IMPOSING, None, Printing, "hand"),
+    c("impose.inks", "Ink manager…", IMPOSING, None, Printing, "swatch-book"),
     c("impose.booklet", "Create booklet…", IMPOSING, None, Printing, "book-open"),
     c("impose.add_bleed", "Add bleed…", IMPOSING, None, Printing, "square-dashed"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),

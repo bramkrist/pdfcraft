@@ -13,6 +13,7 @@ pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
 pub(super) mod impose_ui;
+pub(super) mod inks_ui;
 pub(super) mod manual_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
@@ -49,6 +50,7 @@ struct Pending {
     boxes_now: bool,
     impose_now: bool,
     manual_now: bool,
+    inks_now: bool,
     repeat_now: bool,
     bleed_now: bool,
     marks_now: bool,
@@ -433,6 +435,13 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             ui.set_width(700.0);
             let (go, cancel) = crate::impose_ui::body(ui, app, &t, kind);
             req.impose_now = go;
+            req.close = go || cancel;
+            return false;
+        }
+        Dialog::ImposeInks => {
+            ui.set_width(560.0);
+            let (go, cancel) = crate::inks_ui::body(ui, app);
+            req.inks_now = go;
             req.close = go || cancel;
             return false;
         }
@@ -1989,6 +1998,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     }
     if req.manual_now {
         crate::manual_ui::finish(app);
+    }
+    if req.inks_now {
+        crate::inks_ui::finish(app);
     }
     if req.boxes_now
         && let Some((i, id)) = app.active_ids()

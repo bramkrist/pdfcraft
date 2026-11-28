@@ -125,6 +125,7 @@ pub enum Dialog {
     Impose(crate::impose_ui::ImposeKind),
     /// Imposing ▸ Manual: pages placed by hand on the sheet.
     ImposeManual,
+    ImposeInks,
     /// Add / Update Header and Footer, Watermark, Background.
     Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.

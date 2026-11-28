@@ -827,6 +827,27 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc", "path", "sheets"],
         )),
         t(
+            "doc_inks",
+            "List spot colours",
+            "The spot colours the document uses (the ink manager's list) with the pages (1-based) each is on, by name. Reads the document as it stands, edits included; changes nothing.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "doc_inks_apply",
+            "Manage spot colours",
+            "Save a copy of the document to path with spot colours changed, as a press room's ink manager does: to_process lists spots to print in their alternate (process) colour, taken from the file itself; alias maps a spot to another spot, whose plate it then prints on (A to B, B to C is followed; a loop leaves the spot alone). The open document is not changed. Gradients and images painted in a spot are left as they were and named in kept. A name the document does not use, a spot in both lists or an empty request is refused and nothing is written. Needs printing permitted.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": { "type": "string" },
+                "to_process": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                "alias": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+            }),
+            &["doc", "path"],
+        )),
+        t(
             "doc_bleed",
             "Add bleed",
             "Add bleed around every page and save the print-ready PDF to path (vector pages, not rasterised; encryption is not carried over). The page's current edge is taken as the trim: each page grows by bleed_mm on every side (or left_mm, bottom_mm, right_mm, top_mm for single sides; a side-specific value wins) and gets a TrimBox at the old edge and a BleedBox around the whole new page. method mirror (default): each edge strip is reflected outward across the edge and the corners across both, so the artwork continues as its own mirror image; the bleed must be smaller than the page. scale: the page is enlarged about its centre until it covers page plus bleed, so the trim then crops slightly into the artwork. Not yet: taking an existing TrimBox as the edge, extending edge colours, removing or cropping a bleed.",

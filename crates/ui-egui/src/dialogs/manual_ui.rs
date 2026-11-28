@@ -704,12 +704,13 @@ fn sheet_controls(ui: &mut egui::Ui, d: &mut ManualDraft, unit: Unit) {
     egui::Grid::new("manual-sheet").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
         ui.label(tl!("Sheet"));
         let label = PRESETS.get(d.preset).map_or(tl!("Custom"), |p| p.0);
-        craft_ui::ComboBox::from_id_salt("manual-preset").selected_text(label).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("manual-preset").selected_text(label).show_ui(ui, |ui| {
             for (i, (name, ..)) in PRESETS.iter().enumerate() {
                 ui.selectable_value(&mut d.preset, i, *name);
             }
             ui.selectable_value(&mut d.preset, PRESETS.len(), tl!("Custom"));
         });
+        combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Sheet")));
         ui.end_row();
         if d.preset >= PRESETS.len() {
             ui.label(tl!("Width"));
@@ -832,13 +833,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
             ui.separator();
             ui.horizontal(|ui| {
                 let pages = sizes.len();
-                craft_ui::ComboBox::from_id_salt("manual-page")
+                let combo = craft_ui::ComboBox::from_id_salt("manual-page")
                     .selected_text(crate::i18n::fmt(tl!("Page {n}"), &[("n", &(d.add_page + 1).to_string())]))
                     .show_ui(ui, |ui| {
                         for i in 0..pages {
                             ui.selectable_value(&mut d.add_page, i, crate::i18n::fmt(tl!("Page {n}"), &[("n", &(i + 1).to_string())]));
                         }
                     });
+                combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Page to add")));
                 if ui.button(tl!("Add to sheet")).clicked() {
                     d.add(&sizes, d.add_page);
                 }
@@ -1426,5 +1428,30 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert!((*h.state() - 50.8).abs() < 1e-6, "2 in is 50.8 mm, got {}", h.state());
+    }
+
+    #[test]
+    fn the_whole_dialog_draws_and_every_control_has_an_accessible_name() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PdfCraftApp::new();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        app.open_bytes("a.pdf", None, blank_pdf(420, 595)).expect("opens");
+        app.execute("impose.manual");
+        let mut fonts = false;
+        // The harness checks that every widget has a name a screen reader can say.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 640.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                body(ui, app);
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("Add to sheet");
+        h.get_by_label("Finish");
     }
 }

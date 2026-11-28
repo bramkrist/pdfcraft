@@ -364,6 +364,49 @@ impl Automation {
         Ok(json!({ "sheets": sheets.len(), "placed": placed, "bytes": bytes.len(), "path": path.to_string_lossy() }))
     }
 
+    /// `doc_inks`: the spot colours the document uses and the pages they are on.
+    pub(crate) fn doc_inks(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let spots = self.session.spot_inks(id).map_err(failed)?;
+        Ok(json!({ "spots": spots.iter().map(|s| json!({ "name": s.name, "pages": s.pages })).collect::<Vec<_>>() }))
+    }
+
+    /// `doc_inks_apply`: save a copy with spots printed in process or on another spot's plate.
+    pub(crate) fn doc_inks_apply(&mut self, a: &Args) -> Result<Value> {
+        use std::collections::BTreeMap;
+        let id = self.doc(a)?.id;
+        let mut actions = BTreeMap::new();
+        if let Some(v) = a.get("to_process") {
+            for n in v.as_array().ok_or_else(|| bad("to_process must be an array of spot names"))? {
+                let n = n.as_str().filter(|n| !n.is_empty()).ok_or_else(|| bad("to_process: every entry is a spot name"))?;
+                actions.insert(n.to_string(), pdfcraft_engine::inks::InkAction::ToProcess);
+            }
+        }
+        if let Some(v) = a.get("alias") {
+            for (from, to) in v.as_object().ok_or_else(|| bad("alias must be an object of spot name to spot name"))? {
+                let to = to.as_str().filter(|n| !n.is_empty()).ok_or_else(|| bad(format!("alias[{from:?}]: the target is a spot name")))?;
+                if actions.insert(from.clone(), pdfcraft_engine::inks::InkAction::Alias(to.to_string())).is_some() {
+                    return Err(bad(format!("{from:?} is both in to_process and alias")));
+                }
+            }
+        }
+        if actions.is_empty() {
+            return Err(bad("nothing to do: give to_process and/or alias"));
+        }
+        let known: Vec<String> = self.session.spot_inks(id).map_err(failed)?.into_iter().map(|s| s.name).collect();
+        for name in actions.keys() {
+            if !known.contains(name) {
+                return Err(bad(format!("the document has no spot colour {name:?}; it has {known:?}")));
+            }
+        }
+        let (bytes, report) = self.session.manage_inks_pdf(id, &actions).map_err(failed)?;
+        let path = self.resolve(a.str("path")?, true)?;
+        write_atomic(&path, &bytes)?;
+        Ok(
+            json!({ "converted": report.converted, "aliased": report.aliased, "kept": report.kept, "bytes": bytes.len(), "path": path.to_string_lossy() }),
+        )
+    }
+
     /// `doc_bleed`: add bleed around every page and save the print-ready PDF.
     pub(crate) fn doc_bleed(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;

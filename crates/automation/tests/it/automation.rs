@@ -5433,6 +5433,66 @@ fn manual_imposition_through_tools() {
     assert!(!dir.join("x.pdf").exists(), "a refused layout writes nothing");
 }
 
+/// One page painting with two spots, `Gold` and `Silver`.
+fn two_spot_pdf() -> Vec<u8> {
+    let tint = |c1: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [{c1}] /N 1 >>");
+    let content = "/Cs1 cs 1 scn 0 0 100 100 re f /Cs2 cs 1 scn 100 0 100 100 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /ColorSpace << /Cs1 [/Separation /Gold /DeviceCMYK {}] /Cs2 [/Separation /Silver /DeviceCMYK {}] >> >> /Contents 4 0 R >>",
+            tint("0 0.2 0.9 0"),
+            tint("0 0 0 0.3")
+        ),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+fn spot_names(a: &mut Automation, doc: u64) -> Vec<String> {
+    ok(a, "doc_inks", json!({ "doc": doc }))["spots"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn the_ink_manager_through_tools() {
+    let dir = workdir("inks");
+    std::fs::write(dir.join("spots.pdf"), two_spot_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "spots.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(spot_names(&mut a, doc), ["Gold", "Silver"]);
+
+    let r = ok(&mut a, "doc_inks_apply", json!({ "doc": doc, "path": "p.pdf", "to_process": ["Gold"], "alias": { "Silver": "Gold" } }));
+    assert!(r["converted"]["Gold"].as_u64().unwrap_or(0) > 0, "{r}");
+    let out = ok(&mut a, "doc_open", json!({ "path": "p.pdf" }))["doc"].as_u64().unwrap();
+    assert!(spot_names(&mut a, out).is_empty(), "both plates are gone: Gold in process, Silver on Gold's plate, which is process");
+    assert_eq!(spot_names(&mut a, doc), ["Gold", "Silver"], "the open document is not changed");
+
+    for bad in [
+        json!({ "doc": doc, "path": "x.pdf" }),
+        json!({ "doc": doc, "path": "x.pdf", "to_process": [] }),
+        json!({ "doc": doc, "path": "x.pdf", "to_process": ["Nope"] }),
+        json!({ "doc": doc, "path": "x.pdf", "to_process": ["Gold"], "alias": { "Gold": "Silver" } }),
+        json!({ "doc": doc, "path": "x.pdf", "to_process": [""] }),
+        json!({ "doc": doc, "path": "x.pdf", "alias": { "Gold": 5 } }),
+    ] {
+        assert!(matches!(a.call("doc_inks_apply", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(!dir.join("x.pdf").exists(), "a refused request writes nothing");
+}
+
 #[test]
 fn adding_bleed_through_tools() {
     let dir = workdir("bleed");

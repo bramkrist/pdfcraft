@@ -4435,6 +4435,7 @@ dependencies = [
  "pdfcraft-optimize",
  "pdfcraft-organize",
  "pdfcraft-preflight",
+ "pdfcraft-prepress",
  "pdfcraft-print",
  "pdfcraft-redact",
  "pdfcraft-render",

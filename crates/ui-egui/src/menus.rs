@@ -229,7 +229,7 @@ const SIGN: &[&str] = &[
 ];
 /// Imposing: the press-sheet layouts, as an imposition plug-in's Easy imposition menu has them.
 const IMPOSING: &[&str] =
-    &["impose.step_repeat", "impose.n_up", "impose.unique_collate", "impose.manual", SEP, "impose.booklet", SEP, "impose.add_bleed"];
+    &["impose.step_repeat", "impose.n_up", "impose.unique_collate", "impose.manual", SEP, "impose.booklet", SEP, "impose.add_bleed", "impose.inks"];
 const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab"];
 const HELP: &[&str] =
     &["help.shortcuts", SEP, "help.app_page", "help.github", "help.website", "help.discord", SEP, "help.check_updates", SEP, "help.about"];
